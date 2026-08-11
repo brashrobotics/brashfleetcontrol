@@ -15,32 +15,32 @@ const mimeTypes = {
 };
 
 const destinations = {
-  "pres-a": { x: 31, y: 23 },
-  "montaj-2": { x: 72, y: 26 },
-  "kalite": { x: 74, y: 71 },
-  "depo-b": { x: 24, y: 71 },
-  "sarj": { x: 49, y: 82 },
+  "press-a": { x: 31, y: 23 },
+  "assembly-2": { x: 72, y: 26 },
+  "quality": { x: 74, y: 71 },
+  "warehouse-b": { x: 24, y: 71 },
+  "charging": { x: 49, y: 82 },
 };
 
 export function createInitialState() {
   return {
     robots: [
-      { id: "BR-01", name: "Atlas", x: 22, y: 38, heading: 0, battery: 82, status: "moving", mission: "M-1042", target: "Montaj 2", speed: 1.1 },
-      { id: "BR-02", name: "Nova", x: 55, y: 31, heading: 90, battery: 64, status: "moving", mission: "M-1043", target: "Kalite", speed: 0.8 },
-      { id: "BR-03", name: "Kite", x: 70, y: 63, heading: 180, battery: 26, status: "charging", mission: null, target: "Şarj C-02", speed: 0 },
-      { id: "BR-04", name: "Milo", x: 41, y: 69, heading: 270, battery: 91, status: "idle", mission: null, target: "Bekleme B-01", speed: 0 },
-      { id: "BR-05", name: "Echo", x: 79, y: 42, heading: 180, battery: 47, status: "blocked", mission: "M-1044", target: "Depo B", speed: 0 },
-      { id: "BR-06", name: "Pico", x: 18, y: 74, heading: 90, battery: 73, status: "moving", mission: "M-1041", target: "Pres A", speed: 0.7 },
+      { id: "BR-01", name: "Atlas", x: 22, y: 38, heading: 0, battery: 82, status: "moving", mission: "M-1042", target: "Assembly 2", speed: 1.1 },
+      { id: "BR-02", name: "Nova", x: 55, y: 31, heading: 90, battery: 64, status: "moving", mission: "M-1043", target: "Quality", speed: 0.8 },
+      { id: "BR-03", name: "Kite", x: 70, y: 63, heading: 180, battery: 26, status: "charging", mission: null, target: "Charger C-02", speed: 0 },
+      { id: "BR-04", name: "Milo", x: 41, y: 69, heading: 270, battery: 91, status: "idle", mission: null, target: "Waiting B-01", speed: 0 },
+      { id: "BR-05", name: "Echo", x: 79, y: 42, heading: 180, battery: 47, status: "blocked", mission: "M-1044", target: "Warehouse B", speed: 0 },
+      { id: "BR-06", name: "Pico", x: 18, y: 74, heading: 90, battery: 73, status: "moving", mission: "M-1041", target: "Press A", speed: 0.7 },
     ],
     missions: [
-      { id: "M-1044", robot: "BR-05", from: "Montaj 1", to: "Depo B", status: "blocked", progress: 42, createdAt: "14:29" },
-      { id: "M-1043", robot: "BR-02", from: "Depo A", to: "Kalite", status: "active", progress: 68, createdAt: "14:26" },
-      { id: "M-1042", robot: "BR-01", from: "Pres A", to: "Montaj 2", status: "active", progress: 37, createdAt: "14:23" },
-      { id: "M-1041", robot: "BR-06", from: "Depo B", to: "Pres A", status: "active", progress: 81, createdAt: "14:18" },
+      { id: "M-1044", robot: "BR-05", from: "Assembly 1", to: "Warehouse B", status: "blocked", progress: 42, createdAt: "14:29" },
+      { id: "M-1043", robot: "BR-02", from: "Warehouse A", to: "Quality", status: "active", progress: 68, createdAt: "14:26" },
+      { id: "M-1042", robot: "BR-01", from: "Press A", to: "Assembly 2", status: "active", progress: 37, createdAt: "14:23" },
+      { id: "M-1041", robot: "BR-06", from: "Warehouse B", to: "Press A", status: "active", progress: 81, createdAt: "14:18" },
     ],
     alerts: [
-      { id: "A-014", level: "warning", robot: "BR-05", message: "Koridor 3 geçici engel", time: "14:32" },
-      { id: "A-013", level: "info", robot: "BR-03", message: "Şarj işlemi başladı", time: "14:28" },
+      { id: "A-014", level: "warning", robot: "BR-05", message: "Temporary obstruction in Corridor 3", time: "14:32" },
+      { id: "A-013", level: "info", robot: "BR-03", message: "Charging started", time: "14:28" },
     ],
     updatedAt: new Date().toISOString(),
   };
@@ -110,18 +110,18 @@ export function createFleetServer(state = createInitialState()) {
       try {
         const input = await bodyJson(req);
         const robot = state.robots.find((item) => item.id === input.robotId);
-        if (!robot || !input.destination) return json(res, 400, { error: "Robot ve hedef zorunludur." });
-        if (robot.status === "stopped") return json(res, 409, { error: "Durdurulmuş robota görev atanamaz." });
+        if (!robot || !input.destination) return json(res, 400, { error: "Robot and destination are required." });
+        if (robot.status === "stopped") return json(res, 409, { error: "A mission cannot be assigned to a stopped robot." });
         const destination = destinations[input.destination] || { x: robot.x, y: robot.y };
         const id = `M-${1041 + state.missions.length}`;
         const mission = {
           id,
           robot: robot.id,
-          from: robot.target || "Bekleme",
+          from: robot.target || "Waiting",
           to: input.destinationLabel || input.destination,
           status: "active",
           progress: 0,
-          createdAt: new Date().toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }),
+          createdAt: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
         };
         robot.status = "moving";
         robot.mission = id;
@@ -132,22 +132,22 @@ export function createFleetServer(state = createInitialState()) {
         sendSnapshot();
         return json(res, 201, mission);
       } catch {
-        return json(res, 400, { error: "Geçersiz görev verisi." });
+        return json(res, 400, { error: "Invalid mission data." });
       }
     }
     const robotAction = pathname.match(/^\/api\/robots\/([^/]+)\/(stop|resume)$/);
     if (req.method === "POST" && robotAction) {
       const [, robotId, action] = robotAction;
       const robot = state.robots.find((item) => item.id === robotId);
-      if (!robot) return json(res, 404, { error: "Robot bulunamadı." });
+      if (!robot) return json(res, 404, { error: "Robot not found." });
       robot.status = action === "stop" ? "stopped" : (robot.mission ? "moving" : "idle");
       robot.speed = action === "stop" ? 0 : 0.6;
       state.alerts.unshift({
         id: `A-${String(15 + state.alerts.length).padStart(3, "0")}`,
         level: action === "stop" ? "critical" : "info",
         robot: robot.id,
-        message: action === "stop" ? "Operatör güvenli durdurma uyguladı" : "Robot operasyona döndü",
-        time: new Date().toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }),
+        message: action === "stop" ? "Operator requested a controlled stop" : "Robot returned to operation",
+        time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
       });
       sendSnapshot();
       return json(res, 200, robot);
@@ -187,6 +187,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === normalize(process.argv
   const port = Number(process.env.PORT || 4173);
   const server = createFleetServer();
   server.listen(port, "127.0.0.1", () => {
-    console.log(`BRASH Fleet hazır: http://127.0.0.1:${port}`);
+    console.log(`BRASH Fleet ready: http://127.0.0.1:${port}`);
   });
 }

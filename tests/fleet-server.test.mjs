@@ -27,12 +27,12 @@ test("a mission can be assigned", async () => {
   const response = await fetch(`${baseUrl}/api/missions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ robotId: "BR-04", destination: "kalite", destinationLabel: "Kalite" }),
+    body: JSON.stringify({ robotId: "BR-04", destination: "quality", destinationLabel: "Quality" }),
   });
   assert.equal(response.status, 201);
   const mission = await response.json();
   assert.equal(mission.robot, "BR-04");
-  assert.equal(mission.to, "Kalite");
+  assert.equal(mission.to, "Quality");
 });
 
 test("a robot can be stopped and resumed", async () => {

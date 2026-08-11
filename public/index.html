@@ -1,70 +1,70 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="BRASH Robotics fabrika içi filo ve görev yönetim merkezi" />
+    <meta name="description" content="BRASH Robotics indoor fleet and mission control center" />
     <meta name="theme-color" content="#0b0e0d" />
     <title>BRASH Fleet Control</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
-      <aside class="rail" aria-label="Ana navigasyon">
+      <aside class="rail" aria-label="Main navigation">
         <div class="brand-mark" aria-label="BRASH Robotics">B<span>R</span></div>
         <nav class="rail-nav">
-          <button class="rail-item active" data-view="map" aria-label="Canlı harita"><span class="nav-glyph map-glyph"></span><small>Harita</small></button>
-          <button class="rail-item" data-view="missions" aria-label="Görevler"><span class="nav-glyph list-glyph"></span><small>Görev</small></button>
-          <button class="rail-item" data-view="robots" aria-label="Robotlar"><span class="nav-glyph bot-glyph"></span><small>Robot</small></button>
-          <button class="rail-item" data-view="analytics" aria-label="Analiz"><span class="nav-glyph chart-glyph"></span><small>Analiz</small></button>
+          <button class="rail-item active" data-view="map" aria-label="Live map"><span class="nav-glyph map-glyph"></span><small>Map</small></button>
+          <button class="rail-item" data-view="missions" aria-label="Missions"><span class="nav-glyph list-glyph"></span><small>Mission</small></button>
+          <button class="rail-item" data-view="robots" aria-label="Robots"><span class="nav-glyph bot-glyph"></span><small>Robot</small></button>
+          <button class="rail-item" data-view="analytics" aria-label="Analytics"><span class="nav-glyph chart-glyph"></span><small>Analytics</small></button>
         </nav>
-        <button class="rail-item help" aria-label="Yardım"><span class="question">?</span></button>
-        <div class="avatar" aria-label="Operatör Aras">AK</div>
+        <button class="rail-item help" aria-label="Help"><span class="question">?</span></button>
+        <div class="avatar" aria-label="Operator Aras">AK</div>
       </aside>
 
       <main class="workspace">
         <header class="topbar">
           <div class="title-block">
             <div class="eyebrow">BRASH ROBOTICS / FLEET OS</div>
-            <div class="title-row"><h1>Canlı Operasyon</h1><span class="live-pill"><i></i> CANLI</span></div>
+            <div class="title-row"><h1>Live Operations</h1><span class="live-pill"><i></i> LIVE</span></div>
           </div>
           <div class="top-actions">
-            <label class="plant-select"><span>Tesis</span><select id="plant-select" aria-label="Tesis seç"><option>BRASH Demo Fabrikası</option><option>İstanbul Pilot Tesisi</option></select></label>
-            <div class="clock"><strong id="clock">14:32:08</strong><span>11 AĞU 2026</span></div>
-            <button class="icon-button" id="notification-button" aria-label="Bildirimler"><span class="bell"></span><b id="alert-count">2</b></button>
-            <button class="primary-button" id="new-mission-button"><span>＋</span> Yeni görev</button>
+            <label class="plant-select"><span>Facility</span><select id="plant-select" aria-label="Select facility"><option>BRASH Demo Plant</option><option>Istanbul Pilot Plant</option></select></label>
+            <div class="clock"><strong id="clock">14:32:08</strong><span>AUG 11, 2026</span></div>
+            <button class="icon-button" id="notification-button" aria-label="Notifications"><span class="bell"></span><b id="alert-count">2</b></button>
+            <button class="primary-button" id="new-mission-button"><span>＋</span> New mission</button>
           </div>
         </header>
 
-        <section class="kpi-strip" aria-label="Filo özeti">
-          <article class="kpi-card hero-kpi"><div><span class="kpi-label">AKTİF FİLO</span><strong id="active-count">6</strong><small>/ 6 robot çevrimiçi</small></div><div class="ring" style="--value: 100"><span>100%</span></div></article>
-          <article class="kpi-card"><span class="kpi-dot moving"></span><div><span class="kpi-label">HAREKET HALİNDE</span><strong id="moving-count">3</strong><small>Görevde</small></div><div class="sparkbars"><i></i><i></i><i></i><i></i><i></i></div></article>
-          <article class="kpi-card"><span class="kpi-dot idle"></span><div><span class="kpi-label">BEKLEME / ŞARJ</span><strong id="idle-count">2</strong><small>Hazır durumda</small></div><div class="mini-battery"><i></i></div></article>
-          <article class="kpi-card warning-card"><span class="kpi-dot blocked"></span><div><span class="kpi-label">DİKKAT GEREKİYOR</span><strong id="attention-count">1</strong><small id="attention-note">Koridor 3 engeli</small></div><span class="trend">↗</span></article>
-          <article class="kpi-card"><div><span class="kpi-label">BUGÜN TAMAMLANAN</span><strong>186</strong><small><em>+12%</em> düne göre</small></div><div class="completion-glyph">✓</div></article>
+        <section class="kpi-strip" aria-label="Fleet summary">
+          <article class="kpi-card hero-kpi"><div><span class="kpi-label">ACTIVE FLEET</span><strong id="active-count">6</strong><small>/ 6 robots online</small></div><div class="ring" style="--value: 100"><span>100%</span></div></article>
+          <article class="kpi-card"><span class="kpi-dot moving"></span><div><span class="kpi-label">IN MOTION</span><strong id="moving-count">3</strong><small>On mission</small></div><div class="sparkbars"><i></i><i></i><i></i><i></i><i></i></div></article>
+          <article class="kpi-card"><span class="kpi-dot idle"></span><div><span class="kpi-label">IDLE / CHARGING</span><strong id="idle-count">2</strong><small>Ready</small></div><div class="mini-battery"><i></i></div></article>
+          <article class="kpi-card warning-card"><span class="kpi-dot blocked"></span><div><span class="kpi-label">NEEDS ATTENTION</span><strong id="attention-count">1</strong><small id="attention-note">Corridor 3 obstruction</small></div><span class="trend">↗</span></article>
+          <article class="kpi-card"><div><span class="kpi-label">COMPLETED TODAY</span><strong>186</strong><small><em>+12%</em> vs. yesterday</small></div><div class="completion-glyph">✓</div></article>
         </section>
 
         <section class="content-grid">
           <article class="map-card panel">
             <div class="panel-header">
-              <div><span class="section-index">01</span><div><h2>Fabrika görünümü</h2><p>Kat 01 · Üretim ve lojistik</p></div></div>
+              <div><span class="section-index">01</span><div><h2>Factory view</h2><p>Floor 01 · Production and logistics</p></div></div>
               <div class="map-toolbar">
-                <div class="segmented" role="group" aria-label="Robot filtresi"><button class="active" data-filter="all">Tümü <b>6</b></button><button data-filter="moving">Hareketli</button><button data-filter="attention">Uyarı</button></div>
-                <button class="tool-button" id="fit-map">Haritayı sığdır</button>
-                <button class="tool-button layers-button" id="layers-button"><span></span> Katmanlar</button>
+                <div class="segmented" role="group" aria-label="Robot filter"><button class="active" data-filter="all">All <b>6</b></button><button data-filter="moving">Moving</button><button data-filter="attention">Attention</button></div>
+                <button class="tool-button" id="fit-map">Fit map</button>
+                <button class="tool-button layers-button" id="layers-button"><span></span> Layers</button>
               </div>
             </div>
 
             <div class="map-stage" id="map-stage">
-              <div class="map-coordinate top">K U Z E Y&nbsp;&nbsp; ↑</div>
+              <div class="map-coordinate top">N O R T H&nbsp;&nbsp; ↑</div>
               <div class="factory-map" id="factory-map">
                 <div class="factory-outline"></div>
-                <div class="zone zone-a"><span>PRES HATTI</span><b>A</b></div>
-                <div class="zone zone-b"><span>MONTAJ</span><b>B</b></div>
-                <div class="zone zone-c"><span>KALİTE</span><b>C</b></div>
-                <div class="zone zone-d"><span>DEPO</span><b>D</b></div>
-                <div class="restricted-zone map-layer zones"><span>YAVAŞ BÖLGE</span></div>
-                <div class="blocked-zone map-layer zones"><span>GEÇİCİ ENGEL</span></div>
+                <div class="zone zone-a"><span>PRESS LINE</span><b>A</b></div>
+                <div class="zone zone-b"><span>ASSEMBLY</span><b>B</b></div>
+                <div class="zone zone-c"><span>QUALITY</span><b>C</b></div>
+                <div class="zone zone-d"><span>WAREHOUSE</span><b>D</b></div>
+                <div class="restricted-zone map-layer zones"><span>SLOW ZONE</span></div>
+                <div class="blocked-zone map-layer zones"><span>TEMPORARY OBSTRUCTION</span></div>
 
                 <div class="lane lane-h1 map-layer routes"></div>
                 <div class="lane lane-h2 map-layer routes"></div>
@@ -79,53 +79,53 @@
                 <div class="rack-group rg-1"><i></i><i></i><i></i><i></i><i></i></div>
                 <div class="rack-group rg-2"><i></i><i></i><i></i><i></i></div>
 
-                <button class="station station-a map-layer stations" style="--x: 30%; --y: 23%" aria-label="Pres A istasyonu"><i></i><span>Pres A</span></button>
-                <button class="station station-b map-layer stations" style="--x: 72%; --y: 24%" aria-label="Montaj 2 istasyonu"><i></i><span>Montaj 2</span></button>
-                <button class="station station-c map-layer stations" style="--x: 73%; --y: 74%" aria-label="Kalite istasyonu"><i></i><span>Kalite</span></button>
-                <button class="station charging map-layer stations" style="--x: 50%; --y: 84%" aria-label="Şarj istasyonu"><i>ϟ</i><span>Şarj C-02</span></button>
+                <button class="station station-a map-layer stations" style="--x: 30%; --y: 23%" aria-label="Press A station"><i></i><span>Press A</span></button>
+                <button class="station station-b map-layer stations" style="--x: 72%; --y: 24%" aria-label="Assembly 2 station"><i></i><span>Assembly 2</span></button>
+                <button class="station station-c map-layer stations" style="--x: 73%; --y: 74%" aria-label="Quality station"><i></i><span>Quality</span></button>
+                <button class="station charging map-layer stations" style="--x: 50%; --y: 84%" aria-label="Charging station"><i>ϟ</i><span>Charger C-02</span></button>
 
                 <div id="robot-layer" class="robot-layer map-layer robots" aria-live="polite"></div>
               </div>
 
               <div class="map-scale"><i></i><span>10 m</span></div>
-              <div class="zoom-controls"><button id="zoom-in" aria-label="Yakınlaştır">＋</button><button id="zoom-out" aria-label="Uzaklaştır">−</button></div>
+              <div class="zoom-controls"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button></div>
 
               <div class="layer-popover" id="layer-popover" hidden>
-                <div><strong>Harita katmanları</strong><button id="close-layers" aria-label="Kapat">×</button></div>
-                <label><input type="checkbox" data-layer="routes" checked /> Rotalar</label>
-                <label><input type="checkbox" data-layer="stations" checked /> İstasyonlar</label>
-                <label><input type="checkbox" data-layer="zones" checked /> Güvenlik bölgeleri</label>
-                <label><input type="checkbox" data-layer="robots" checked /> Robot kimlikleri</label>
+                <div><strong>Map layers</strong><button id="close-layers" aria-label="Close">×</button></div>
+                <label><input type="checkbox" data-layer="routes" checked /> Routes</label>
+                <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
+                <label><input type="checkbox" data-layer="zones" checked /> Safety zones</label>
+                <label><input type="checkbox" data-layer="robots" checked /> Robot labels</label>
               </div>
             </div>
-            <footer class="map-footer"><span><i class="legend moving"></i> Görevde</span><span><i class="legend idle"></i> Bekliyor</span><span><i class="legend charging"></i> Şarj oluyor</span><span><i class="legend blocked"></i> Engellendi</span><div class="map-update"><i></i> Son veri: <b id="last-update">şimdi</b></div></footer>
+            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend charging"></i> Charging</span><span><i class="legend blocked"></i> Blocked</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
           </article>
 
           <aside class="detail-stack">
             <article class="robot-detail panel" id="robot-detail">
-              <div class="detail-head"><div><span class="section-index">02</span><span>ROBOT DETAYI</span></div><button id="close-detail" aria-label="Robot detayını kapat">×</button></div>
-              <div class="robot-identity"><div class="large-robot"><i></i></div><div><span class="status-line" id="detail-status-dot">● <b id="detail-status">GÖREVDE</b></span><h2 id="detail-name">Atlas</h2><p><span id="detail-id">BR-01</span> · AMR 150</p></div></div>
-              <div class="mission-block"><span>AKTİF GÖREV</span><strong id="detail-mission">M-1042</strong><p><span>Pres A</span><i>→</i><b id="detail-target">Montaj 2</b></p><div class="progress"><i id="mission-progress" style="width:37%"></i></div><small><span id="detail-progress">37% tamamlandı</span><b>ETA 04:18</b></small></div>
+              <div class="detail-head"><div><span class="section-index">02</span><span>ROBOT DETAILS</span></div><button id="close-detail" aria-label="Close robot details">×</button></div>
+              <div class="robot-identity"><div class="large-robot"><i></i></div><div><span class="status-line" id="detail-status-dot">● <b id="detail-status">ON MISSION</b></span><h2 id="detail-name">Atlas</h2><p><span id="detail-id">BR-01</span> · AMR 150</p></div></div>
+              <div class="mission-block"><span>ACTIVE MISSION</span><strong id="detail-mission">M-1042</strong><p><span>Press A</span><i>→</i><b id="detail-target">Assembly 2</b></p><div class="progress"><i id="mission-progress" style="width:37%"></i></div><small><span id="detail-progress">37% complete</span><b>ETA 04:18</b></small></div>
               <div class="telemetry-grid">
-                <div><span>BATARYA</span><strong id="detail-battery">82%</strong><div class="battery-line"><i id="battery-progress" style="width:82%"></i></div></div>
-                <div><span>HIZ</span><strong id="detail-speed">1.1 <small>m/s</small></strong><p>Limit 1.5 m/s</p></div>
-                <div><span>BAĞLANTI</span><strong class="good">−49 <small>dBm</small></strong><p>Wi-Fi 6 · İyi</p></div>
-                <div><span>SON BAKIM</span><strong>18 <small>gün</small></strong><p>312 saat kaldı</p></div>
+                <div><span>BATTERY</span><strong id="detail-battery">82%</strong><div class="battery-line"><i id="battery-progress" style="width:82%"></i></div></div>
+                <div><span>SPEED</span><strong id="detail-speed">1.1 <small>m/s</small></strong><p>Limit 1.5 m/s</p></div>
+                <div><span>CONNECTION</span><strong class="good">−49 <small>dBm</small></strong><p>Wi-Fi 6 · Good</p></div>
+                <div><span>LAST SERVICE</span><strong>18 <small>days</small></strong><p>312 hours remaining</p></div>
               </div>
-              <div class="detail-actions"><button class="secondary-button" id="locate-button">◎ Haritada bul</button><button class="danger-button" id="stop-button">■ Güvenli durdur</button></div>
+              <div class="detail-actions"><button class="secondary-button" id="locate-button">◎ Locate on map</button><button class="danger-button" id="stop-button">■ Controlled stop</button></div>
             </article>
 
             <article class="alerts-card panel">
-              <div class="small-panel-title"><div><span class="section-index">03</span><h2>Canlı olaylar</h2></div><button id="clear-events">Temizle</button></div>
+              <div class="small-panel-title"><div><span class="section-index">03</span><h2>Live events</h2></div><button id="clear-events">Clear</button></div>
               <div id="alert-list" class="alert-list"></div>
             </article>
           </aside>
         </section>
 
         <section class="mission-drawer panel" id="mission-drawer">
-          <div class="drawer-heading"><div><span class="section-index">04</span><div><h2>Görev akışı</h2><p>Aktif ve bekleyen taşıma işleri</p></div></div><div><button class="text-button" id="show-all-missions">Tüm görevler</button><button class="collapse-button" id="collapse-missions" aria-label="Görevleri daralt">⌄</button></div></div>
+          <div class="drawer-heading"><div><span class="section-index">04</span><div><h2>Mission flow</h2><p>Active and queued transport jobs</p></div></div><div><button class="text-button" id="show-all-missions">All missions</button><button class="collapse-button" id="collapse-missions" aria-label="Collapse missions">⌄</button></div></div>
           <div class="mission-table-wrap">
-            <table><thead><tr><th>Görev</th><th>Robot</th><th>Başlangıç</th><th>Hedef</th><th>Durum</th><th>İlerleme</th><th>Oluşturma</th></tr></thead><tbody id="mission-table"></tbody></table>
+            <table><thead><tr><th>Mission</th><th>Robot</th><th>Origin</th><th>Destination</th><th>Status</th><th>Progress</th><th>Created</th></tr></thead><tbody id="mission-table"></tbody></table>
           </div>
         </section>
       </main>
@@ -133,12 +133,12 @@
 
     <dialog id="mission-dialog" class="mission-dialog">
       <form id="mission-form" method="dialog">
-        <div class="dialog-head"><div><span>YENİ OPERASYON</span><h2>Taşıma görevi oluştur</h2></div><button type="button" id="close-dialog" aria-label="Kapat">×</button></div>
-        <p class="dialog-copy">Uygun bir robot seçin ve fabrika içindeki hedef istasyonu atayın.</p>
+        <div class="dialog-head"><div><span>NEW OPERATION</span><h2>Create transport mission</h2></div><button type="button" id="close-dialog" aria-label="Close">×</button></div>
+        <p class="dialog-copy">Select an available robot and assign a destination station in the factory.</p>
         <label>Robot<select id="mission-robot" required></select></label>
-        <label>Hedef istasyon<select id="mission-destination" required><option value="pres-a">Pres A</option><option value="montaj-2">Montaj 2</option><option value="kalite">Kalite</option><option value="depo-b">Depo B</option><option value="sarj">Şarj C-02</option></select></label>
-        <label class="priority-row"><input type="checkbox" id="mission-priority" /> Öncelikli görev olarak işaretle</label>
-        <div class="dialog-actions"><button type="button" class="secondary-button" id="cancel-dialog">Vazgeç</button><button type="submit" class="primary-button">Görevi başlat</button></div>
+        <label>Destination station<select id="mission-destination" required><option value="press-a">Press A</option><option value="assembly-2">Assembly 2</option><option value="quality">Quality</option><option value="warehouse-b">Warehouse B</option><option value="charging">Charger C-02</option></select></label>
+        <label class="priority-row"><input type="checkbox" id="mission-priority" /> Mark as priority mission</label>
+        <div class="dialog-actions"><button type="button" class="secondary-button" id="cancel-dialog">Cancel</button><button type="submit" class="primary-button">Start mission</button></div>
       </form>
     </dialog>
 
