@@ -8,8 +8,17 @@
   },
   "scripts": {
     "dev": "node server.mjs",
+    "dev:core": "node --import tsx apps/fleet-server/src/dev.ts",
     "start": "node server.mjs",
-    "build": "node --check server.mjs && node --check public/app.js && node scripts/build.mjs",
-    "test": "node --test tests/fleet-server.test.mjs"
+    "build": "npm run typecheck && node --check server.mjs && node --check public/app.js && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run test:core && npm run test:legacy",
+    "test:core": "node --import tsx --test packages/domain/src/mission/mission.test.ts packages/application/src/policies/weighted-dispatch-policy.test.ts tests/contract/simulator-adapter.test.ts tests/integration/fleet-core-events.test.ts tests/e2e/fleet-core-api.test.ts",
+    "test:legacy": "node --test tests/fleet-server.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
   }
 }

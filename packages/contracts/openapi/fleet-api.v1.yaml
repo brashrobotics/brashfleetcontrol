@@ -1,0 +1,279 @@
+openapi: 3.1.0
+info:
+  title: BRASH Fleet Core API
+  version: 0.1.0
+  description: Vendor-independent mission creation, dispatch, and Fleet state API.
+servers:
+  - url: http://127.0.0.1:4273
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: Fleet Core health summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, service, robots, missions]
+                properties:
+                  ok: { type: boolean }
+                  service: { type: string }
+                  robots: { type: integer, minimum: 0 }
+                  missions: { type: integer, minimum: 0 }
+  /api/v1/fleet/snapshot:
+    get:
+      operationId: getFleetSnapshot
+      responses:
+        "200":
+          description: Canonical Fleet snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FleetSnapshot"
+  /api/v1/missions:
+    post:
+      operationId: createMission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMissionRequest"
+      responses:
+        "201":
+          description: Mission created and, unless disabled, dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mission]
+                properties:
+                  mission: { $ref: "#/components/schemas/Mission" }
+                  dispatch: { $ref: "#/components/schemas/DispatchResult" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/missions/{missionId}:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    get:
+      operationId: getMission
+      responses:
+        "200":
+          description: Mission details
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mission]
+                properties:
+                  mission: { $ref: "#/components/schemas/Mission" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/missions/{missionId}/dispatch:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    post:
+      operationId: dispatchMission
+      responses:
+        "200":
+          description: Dispatch decision and command receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dispatch]
+                properties:
+                  dispatch: { $ref: "#/components/schemas/DispatchResult" }
+components:
+  parameters:
+    MissionId:
+      name: missionId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: Entity not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+  schemas:
+    Location:
+      type: object
+      additionalProperties: false
+      required: [stationId, mapId, x, y]
+      properties:
+        stationId: { type: string, minLength: 1 }
+        mapId: { type: string, minLength: 1 }
+        x: { type: number }
+        y: { type: number }
+        zoneId: { type: string, minLength: 1 }
+    CreateMissionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, priority, requiredCapabilities, payloadKg, pickup, dropoff]
+      properties:
+        type: { const: TRANSPORT }
+        externalReference: { type: string, minLength: 1 }
+        priority: { type: number, minimum: 0, maximum: 100 }
+        requiredCapabilities:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        payloadKg: { type: number, minimum: 0 }
+        pickup: { $ref: "#/components/schemas/Location" }
+        dropoff: { $ref: "#/components/schemas/Location" }
+        autoDispatch: { type: boolean, default: true }
+    Mission:
+      type: object
+      required:
+        - missionId
+        - type
+        - priority
+        - requiredCapabilities
+        - payloadKg
+        - pickup
+        - dropoff
+        - state
+        - assignedRobotId
+        - commandId
+        - createdAt
+        - updatedAt
+        - failureReason
+      properties:
+        missionId: { type: string }
+        type: { const: TRANSPORT }
+        externalReference: { type: string }
+        priority: { type: number }
+        requiredCapabilities:
+          type: array
+          items: { type: string }
+        payloadKg: { type: number }
+        pickup: { $ref: "#/components/schemas/Location" }
+        dropoff: { $ref: "#/components/schemas/Location" }
+        state:
+          type: string
+          enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, CANCELLING, CANCELLED, COMPLETED, FAILED]
+        assignedRobotId: { type: [string, "null"] }
+        commandId: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        failureReason: { type: [string, "null"] }
+    CandidateEvaluation:
+      type: object
+      required: [robotId, eligible, score, reasons]
+      properties:
+        robotId: { type: string }
+        eligible: { type: boolean }
+        score: { type: [number, "null"] }
+        reasons:
+          type: array
+          items: { type: string }
+    AssignmentDecision:
+      type: object
+      required: [missionId, selectedRobotId, selectedScore, reasons, candidates]
+      properties:
+        missionId: { type: string }
+        selectedRobotId: { type: [string, "null"] }
+        selectedScore: { type: [number, "null"] }
+        reasons:
+          type: array
+          items: { type: string }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/CandidateEvaluation" }
+    CommandReceipt:
+      type: object
+      required: [schemaVersion, commandId, missionId, robotId, status, receivedAt]
+      properties:
+        schemaVersion: { const: "1.0" }
+        commandId: { type: string }
+        missionId: { type: string }
+        robotId: { type: string }
+        status: { type: string, enum: [ACCEPTED, REJECTED] }
+        receivedAt: { type: string, format: date-time }
+        reason: { type: string }
+    DispatchResult:
+      type: object
+      required: [mission, decision, receipt]
+      properties:
+        mission: { $ref: "#/components/schemas/Mission" }
+        decision: { $ref: "#/components/schemas/AssignmentDecision" }
+        receipt:
+          oneOf:
+            - { $ref: "#/components/schemas/CommandReceipt" }
+            - { type: "null" }
+    RobotState:
+      type: object
+      required: [schemaVersion, robotId, sequence, observedAt, connection, availability, batteryPercent, pose, activeMissionId]
+      properties:
+        schemaVersion: { const: "1.0" }
+        robotId: { type: string }
+        sequence: { type: integer, minimum: 0 }
+        observedAt: { type: string, format: date-time }
+        connection: { type: string, enum: [ONLINE, OFFLINE] }
+        availability: { type: string, enum: [AVAILABLE, RESERVED, EXECUTING, CHARGING, ERROR, MANUAL] }
+        batteryPercent: { type: number, minimum: 0, maximum: 100 }
+        pose:
+          type: object
+          required: [mapId, x, y, yaw]
+          properties:
+            mapId: { type: string }
+            x: { type: number }
+            y: { type: number }
+            yaw: { type: number }
+        activeMissionId: { type: [string, "null"] }
+    Robot:
+      type: object
+      required: [robotId, displayName, vendor, model, capabilities, state]
+      properties:
+        robotId: { type: string }
+        displayName: { type: string }
+        vendor: { type: string }
+        model: { type: string }
+        capabilities:
+          type: object
+          required: [actions, maxPayloadKg, allowedZones]
+          properties:
+            actions:
+              type: array
+              items: { type: string }
+            maxPayloadKg: { type: number, minimum: 0 }
+            allowedZones:
+              type: array
+              items: { type: string }
+        state: { $ref: "#/components/schemas/RobotState" }
+    FleetSnapshot:
+      type: object
+      required: [schemaVersion, updatedAt, robots, missions]
+      properties:
+        schemaVersion: { const: "1.0" }
+        updatedAt: { type: string, format: date-time }
+        robots:
+          type: array
+          items: { $ref: "#/components/schemas/Robot" }
+        missions:
+          type: array
+          items: { $ref: "#/components/schemas/Mission" }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            issues:
+              type: array
+              items: { type: string }
+

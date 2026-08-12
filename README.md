@@ -39,11 +39,40 @@ node server.mjs
 
 Then open `http://127.0.0.1:4173`.
 
+### Run the new Fleet Core vertical slice
+
+The repository now also contains the first vendor-independent Fleet Core implementation:
+
+- Canonical robot and mission contracts
+- Mission and robot domain state machines
+- Robot Adapter SDK
+- Deterministic SimulatorAdapter
+- Capability, payload, map, zone, availability, and battery filtering
+- Explainable weighted robot selection
+- Idempotent command handling
+- Mission execution state reconciliation
+- Versioned `/api/v1` HTTP endpoints
+
+Start it separately from the existing operator demo:
+
+```bash
+npm run dev:core
+```
+
+The Fleet Core API is available at `http://127.0.0.1:4273`. See the [Fleet Core quick start](./docs/api/FLEET_CORE_QUICKSTART.md) for a complete mission example.
+
 Run the tests:
 
 ```powershell
 node --test tests/fleet-server.test.mjs
 node --check public/app.js
+```
+
+Run the new Fleet Core validation:
+
+```bash
+npm run typecheck
+npm run test:core
 ```
 
 ## Target system architecture

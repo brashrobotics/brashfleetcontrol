@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brashrobotics.example/contracts/create-mission.v1.schema.json",
+  "title": "CreateMissionRequestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "priority",
+    "requiredCapabilities",
+    "payloadKg",
+    "pickup",
+    "dropoff"
+  ],
+  "properties": {
+    "type": { "const": "TRANSPORT" },
+    "externalReference": { "type": "string", "minLength": 1 },
+    "priority": { "type": "number", "minimum": 0, "maximum": 100 },
+    "requiredCapabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "payloadKg": { "type": "number", "minimum": 0 },
+    "pickup": { "$ref": "#/$defs/location" },
+    "dropoff": { "$ref": "#/$defs/location" },
+    "autoDispatch": { "type": "boolean" }
+  },
+  "$defs": {
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stationId", "mapId", "x", "y"],
+      "properties": {
+        "stationId": { "type": "string", "minLength": 1 },
+        "mapId": { "type": "string", "minLength": 1 },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "zoneId": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
