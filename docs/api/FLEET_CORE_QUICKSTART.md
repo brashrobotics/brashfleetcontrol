@@ -23,6 +23,10 @@ npm run dev:core
 
 The API starts at `http://127.0.0.1:4273`.
 
+Open `http://127.0.0.1:4273` in a browser to view the Fleet Management screen.
+It reads Fleet Core data from the same server. The health endpoint remains at
+`/api/v1/health`.
+
 ## Start Fleet Core with PostgreSQL
 
 Start PostgreSQL and copy the documented development configuration:
@@ -36,6 +40,10 @@ set +a
 npm run db:migrate
 npm run dev:core:postgres
 ```
+
+Then open `http://127.0.0.1:4273`. The dashboard reads the PostgreSQL-backed
+Fleet Core snapshot and its **New mission** action creates a real mission through
+the Fleet Core API.
 
 Fleet Core also selects PostgreSQL automatically when `DATABASE_URL` is set.
 The migration runner is safe to run more than once and rejects changes to an

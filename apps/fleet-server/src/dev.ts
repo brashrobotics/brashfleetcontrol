@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { loadPersistenceConfig } from "@brash/config";
 import { createDevelopmentSystem } from "./bootstrap/create-development-system.js";
 import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
+import { serveFleetUi } from "./http/static-fleet-ui.js";
 
 const persistenceConfig = loadPersistenceConfig();
 const postgresSystem = persistenceConfig.mode === "postgres"
@@ -14,6 +15,14 @@ await core.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
 const server = createServer(async (incoming, outgoing) => {
+  const pathname = new URL(incoming.url ?? "/", `http://127.0.0.1:${port}`).pathname;
+  if ((incoming.method === "GET" || incoming.method === "HEAD") && !pathname.startsWith("/api/")) {
+    const response = await serveFleetUi(pathname, incoming.method);
+    outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+    outgoing.end(Buffer.from(await response.arrayBuffer()));
+    return;
+  }
+
   const body = incoming.method === "GET" || incoming.method === "HEAD"
     ? undefined
     : Readable.toWeb(incoming) as ReadableStream<Uint8Array>;
@@ -41,6 +50,6 @@ process.once("SIGINT", () => void shutdown());
 
 server.listen(port, "127.0.0.1", () => {
   console.log(
-    `BRASH Fleet Core ready (${persistenceConfig.mode}): http://127.0.0.1:${port}/api/v1/health`,
+    `BRASH Fleet Control ready (${persistenceConfig.mode}): http://127.0.0.1:${port}`,
   );
 });

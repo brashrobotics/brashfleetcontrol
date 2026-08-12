@@ -61,7 +61,8 @@ Start it separately from the existing operator demo:
 npm run dev:core
 ```
 
-The Fleet Core API is available at `http://127.0.0.1:4273`. See the [Fleet Core quick start](./docs/api/FLEET_CORE_QUICKSTART.md) for a complete mission example.
+The Fleet Management screen is available at `http://127.0.0.1:4273`; the Fleet
+Core API is served under `http://127.0.0.1:4273/api/v1`. See the [Fleet Core quick start](./docs/api/FLEET_CORE_QUICKSTART.md) for a complete mission example.
 
 Run the tests:
 

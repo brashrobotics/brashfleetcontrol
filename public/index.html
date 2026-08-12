@@ -37,7 +37,7 @@
         </header>
 
         <section class="kpi-strip" aria-label="Fleet summary">
-          <article class="kpi-card hero-kpi"><div><span class="kpi-label">ACTIVE FLEET</span><strong id="active-count">6</strong><small>/ 6 robots online</small></div><div class="ring" style="--value: 100"><span>100%</span></div></article>
+          <article class="kpi-card hero-kpi"><div><span class="kpi-label">ACTIVE FLEET</span><strong id="active-count">6</strong><small>/ <span id="online-count">6</span> robots online</small></div><div class="ring" style="--value: 100"><span>100%</span></div></article>
           <article class="kpi-card"><span class="kpi-dot moving"></span><div><span class="kpi-label">IN MOTION</span><strong id="moving-count">3</strong><small>On mission</small></div><div class="sparkbars"><i></i><i></i><i></i><i></i><i></i></div></article>
           <article class="kpi-card"><span class="kpi-dot idle"></span><div><span class="kpi-label">IDLE / CHARGING</span><strong id="idle-count">2</strong><small>Ready</small></div><div class="mini-battery"><i></i></div></article>
           <article class="kpi-card warning-card"><span class="kpi-dot blocked"></span><div><span class="kpi-label">NEEDS ATTENTION</span><strong id="attention-count">1</strong><small id="attention-note">Corridor 3 obstruction</small></div><span class="trend">↗</span></article>
@@ -105,7 +105,7 @@
             <article class="robot-detail panel" id="robot-detail">
               <div class="detail-head"><div><span class="section-index">02</span><span>ROBOT DETAILS</span></div><button id="close-detail" aria-label="Close robot details">×</button></div>
               <div class="robot-identity"><div class="large-robot"><i></i></div><div><span class="status-line" id="detail-status-dot">● <b id="detail-status">ON MISSION</b></span><h2 id="detail-name">Atlas</h2><p><span id="detail-id">BR-01</span> · AMR 150</p></div></div>
-              <div class="mission-block"><span>ACTIVE MISSION</span><strong id="detail-mission">M-1042</strong><p><span>Press A</span><i>→</i><b id="detail-target">Assembly 2</b></p><div class="progress"><i id="mission-progress" style="width:37%"></i></div><small><span id="detail-progress">37% complete</span><b>ETA 04:18</b></small></div>
+              <div class="mission-block"><span>ACTIVE MISSION</span><strong id="detail-mission">M-1042</strong><p><span id="detail-origin">Press A</span><i>→</i><b id="detail-target">Assembly 2</b></p><div class="progress"><i id="mission-progress" style="width:37%"></i></div><small><span id="detail-progress">37% complete</span><b>ETA 04:18</b></small></div>
               <div class="telemetry-grid">
                 <div><span>BATTERY</span><strong id="detail-battery">82%</strong><div class="battery-line"><i id="battery-progress" style="width:82%"></i></div></div>
                 <div><span>SPEED</span><strong id="detail-speed">1.1 <small>m/s</small></strong><p>Limit 1.5 m/s</p></div>
@@ -134,8 +134,8 @@
     <dialog id="mission-dialog" class="mission-dialog">
       <form id="mission-form" method="dialog">
         <div class="dialog-head"><div><span>NEW OPERATION</span><h2>Create transport mission</h2></div><button type="button" id="close-dialog" aria-label="Close">×</button></div>
-        <p class="dialog-copy">Select an available robot and assign a destination station in the factory.</p>
-        <label>Robot<select id="mission-robot" required></select></label>
+        <p class="dialog-copy">Select a pickup robot and destination. Fleet Core validates the request and assigns the best eligible robot.</p>
+        <label>Pickup robot<select id="mission-robot" required></select></label>
         <label>Destination station<select id="mission-destination" required><option value="press-a">Press A</option><option value="assembly-2">Assembly 2</option><option value="quality">Quality</option><option value="warehouse-b">Warehouse B</option><option value="charging">Charger C-02</option></select></label>
         <label class="priority-row"><input type="checkbox" id="mission-priority" /> Mark as priority mission</label>
         <div class="dialog-actions"><button type="button" class="secondary-button" id="cancel-dialog">Cancel</button><button type="submit" class="primary-button">Start mission</button></div>
