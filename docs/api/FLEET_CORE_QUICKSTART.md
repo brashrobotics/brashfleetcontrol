@@ -28,7 +28,7 @@ The API starts at `http://127.0.0.1:4273`.
 Start PostgreSQL and copy the documented development configuration:
 
 ```bash
-docker compose up -d postgres
+docker compose up -d --wait postgres
 cp .env.example .env
 set -a
 source .env
@@ -39,7 +39,8 @@ npm run dev:core:postgres
 
 Fleet Core also selects PostgreSQL automatically when `DATABASE_URL` is set.
 The migration runner is safe to run more than once and rejects changes to an
-already-applied migration.
+already-applied migration. It retries transient startup connections for up to
+30 seconds, which also covers PostgreSQL's first-run initialization restart.
 
 PostgreSQL persists:
 

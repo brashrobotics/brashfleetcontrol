@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { PoolClient } from "pg";
 import type { PostgresDatabase } from "./postgres-database.js";
@@ -10,6 +11,12 @@ export interface AppliedMigration {
   checksum: string;
 }
 
+export interface PostgresStartupRetryOptions {
+  timeoutMs?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+}
+
 const MIGRATION_LOCK_ID = 7_425_050_500;
 const DEFAULT_MIGRATIONS_DIRECTORY = fileURLToPath(
   new URL("../../../../database/migrations/", import.meta.url),
@@ -17,9 +24,10 @@ const DEFAULT_MIGRATIONS_DIRECTORY = fileURLToPath(
 
 export async function runPostgresMigrations(
   database: PostgresDatabase,
+  retryOptions: PostgresStartupRetryOptions = {},
   directory = DEFAULT_MIGRATIONS_DIRECTORY,
 ): Promise<AppliedMigration[]> {
-  return database.withDedicatedClient(async (client) => {
+  return retryPostgresStartup(() => database.withDedicatedClient(async (client) => {
     await ensureMigrationTable(client);
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
     try {
@@ -27,7 +35,36 @@ export async function runPostgresMigrations(
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_ID]);
     }
-  });
+  }), retryOptions);
+}
+
+export async function retryPostgresStartup<T>(
+  operation: () => Promise<T>,
+  options: PostgresStartupRetryOptions = {},
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const maxDelayMs = options.maxDelayMs ?? 2_000;
+  let retryDelayMs = options.initialDelayMs ?? 250;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRetryableStartupError(error)) throw error;
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `PostgreSQL did not become ready within ${timeoutMs} ms.`,
+          { cause: error },
+        );
+      }
+
+      await delay(Math.min(retryDelayMs, remainingMs));
+      retryDelayMs = Math.min(retryDelayMs * 2, maxDelayMs);
+    }
+  }
 }
 
 async function ensureMigrationTable(client: PoolClient): Promise<void> {
@@ -78,4 +115,28 @@ async function applyPendingMigrations(
   }
 
   return applied;
+}
+
+function isRetryableStartupError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = "code" in error && typeof error.code === "string" ? error.code : "";
+  if (new Set([
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "EPIPE",
+    "ETIMEDOUT",
+    "57P01",
+    "57P02",
+    "57P03",
+    "08000",
+    "08001",
+    "08003",
+    "08004",
+    "08006",
+    "08007",
+    "08P01",
+  ]).has(code)) return true;
+
+  return /connection terminated unexpectedly|server closed the connection unexpectedly|database system is starting up/i
+    .test(error.message);
 }

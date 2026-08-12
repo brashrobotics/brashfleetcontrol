@@ -28,6 +28,7 @@ Document public interfaces, validate external inputs, add focused tests, and def
 | `DATABASE_POOL_MAX` | Maximum pool connections | `10` |
 | `DATABASE_IDLE_TIMEOUT_MS` | Idle connection timeout | `30000` |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | Server-side statement timeout | `15000` |
+| `DATABASE_STARTUP_TIMEOUT_MS` | Migration startup retry window | `30000` |
 
 Use `.env.example` for local development and a secret manager in deployed
 environments.

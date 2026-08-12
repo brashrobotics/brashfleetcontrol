@@ -3,6 +3,7 @@ export interface DatabaseConfig {
   maxConnections: number;
   idleTimeoutMs: number;
   statementTimeoutMs: number;
+  startupTimeoutMs: number;
   ssl: boolean;
 }
 
@@ -36,6 +37,7 @@ export function loadPersistenceConfig(
       maxConnections: positiveInteger(environment.DATABASE_POOL_MAX, 10, "DATABASE_POOL_MAX"),
       idleTimeoutMs: positiveInteger(environment.DATABASE_IDLE_TIMEOUT_MS, 30_000, "DATABASE_IDLE_TIMEOUT_MS"),
       statementTimeoutMs: positiveInteger(environment.DATABASE_STATEMENT_TIMEOUT_MS, 15_000, "DATABASE_STATEMENT_TIMEOUT_MS"),
+      startupTimeoutMs: positiveInteger(environment.DATABASE_STARTUP_TIMEOUT_MS, 30_000, "DATABASE_STARTUP_TIMEOUT_MS"),
       ssl: environment.DATABASE_SSL === "true",
     },
   };

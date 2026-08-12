@@ -12,6 +12,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+      start_period: 5s
     volumes:
       - brash-postgres-data:/var/lib/postgresql/data
 

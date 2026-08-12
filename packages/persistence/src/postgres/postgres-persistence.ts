@@ -16,8 +16,10 @@ export class PostgresPersistence {
   readonly commands: PostgresCommandRepository;
   readonly decisions: PostgresAssignmentDecisionRepository;
   readonly transactions: PostgresTransactionManager;
+  private readonly startupTimeoutMs: number;
 
   constructor(config: DatabaseConfig) {
+    this.startupTimeoutMs = config.startupTimeoutMs;
     this.database = new PostgresDatabase(config);
     this.missions = new PostgresMissionRepository(this.database);
     this.robots = new PostgresRobotRepository(this.database);
@@ -27,7 +29,7 @@ export class PostgresPersistence {
   }
 
   async migrate(): Promise<void> {
-    await runPostgresMigrations(this.database);
+    await runPostgresMigrations(this.database, { timeoutMs: this.startupTimeoutMs });
   }
 
   async close(): Promise<void> {
