@@ -22,9 +22,11 @@ Document public interfaces, validate external inputs, add focused tests, and def
 
 Mission commands are inserted into `command_outbox` in the same transaction as
 the robot reservation and mission assignment. Delivery happens after commit.
-Adapter transport failures leave the row pending; Fleet Core retries pending
-rows after restart with the original `commandId`. Accepted and rejected
-receipts close the outbox row.
+Adapter transport failures leave the row pending. A background worker claims
+due rows using expiring leases and retries them with exponential backoff; Fleet
+Core also runs the same recovery pass during startup. The original `commandId`
+is retained across every attempt. Accepted and rejected receipts close the
+outbox row.
 
 This is at-least-once delivery. Every robot adapter must return the original
 receipt when it receives a duplicate `commandId`.

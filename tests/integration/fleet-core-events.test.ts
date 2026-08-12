@@ -20,6 +20,17 @@ test("Fleet Core reconciles simulator execution events into mission and robot st
   await adapter.completeMission(dispatched.mission.commandId!);
   assert.equal((await core.getMission(created.missionId)).state, "COMPLETED");
 
+  const events = await core.getMissionEvents(created.missionId);
+  assert.deepEqual(events.map((event) => event.type), [
+    "MISSION_QUEUED",
+    "MISSION_ASSIGNED",
+    "COMMAND_DISPATCHED",
+    "MISSION_EXECUTING",
+    "MISSION_COMPLETED",
+  ]);
+  assert.equal(events.at(-1)?.state, "COMPLETED");
+  assert.equal(events.at(-1)?.commandId, dispatched.mission.commandId);
+
   const selectedRobot = (await core.getSnapshot()).robots.find((robot) => robot.robotId === "BR-01");
   assert.equal(selectedRobot?.state.availability, "AVAILABLE");
   assert.equal(selectedRobot?.state.activeMissionId, null);
@@ -38,4 +49,3 @@ test("external mission reference makes mission creation idempotent", async () =>
   assert.equal((await core.getSnapshot()).missions.length, 1);
   await core.stop();
 });
-

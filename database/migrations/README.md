@@ -27,6 +27,11 @@ Keep this README current as implementation is added, and define ownership, valid
 - `assignment_decisions` stores explainable dispatch results.
 - `command_outbox` stores commands, attempts, and adapter receipts.
 
+`002_mission_events_and_outbox_leases.sql` adds:
+
+- `mission_events`, an ordered audit trail of mission lifecycle and delivery events.
+- Due-time scheduling and expiring worker leases for safe command retries across server instances.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

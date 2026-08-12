@@ -4,6 +4,7 @@ import {
   SystemClock,
   WeightedDispatchPolicy,
 } from "@brash/application";
+import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
@@ -19,11 +20,13 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       robots: persistence.robots,
       commands: persistence.commands,
       decisions: persistence.decisions,
+      events: persistence.events,
       transactions: persistence.transactions,
       clock: new SystemClock(),
       ids: new RandomIdGenerator(),
       adapter,
       dispatchPolicy: new WeightedDispatchPolicy(),
+      instanceId: `fleet-server-${randomUUID()}`,
     });
 
     return { core, api: new FleetApi(core), adapter, persistence };

@@ -56,13 +56,15 @@ PostgreSQL persists:
 - Mission lifecycle and robot assignment.
 - Every dispatch decision and candidate evaluation.
 - Pending commands, delivery attempts, and adapter receipts.
+- Mission audit events for assignment, command delivery, and execution state.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
 Fleet Core instances cannot reserve the same robot. A command is added to the
 outbox in that same transaction. Pending commands are retried with the same
 `commandId` when Fleet Core restarts, so adapters must implement idempotent
-command handling.
+command handling. While Fleet Core is running, the outbox worker retries due
+commands automatically using expiring leases and exponential backoff.
 
 ## Create and automatically dispatch a transport mission
 
@@ -104,6 +106,13 @@ The development simulator exposes three robots. The dispatch response includes:
 
 ```bash
 curl http://127.0.0.1:4273/api/v1/fleet/snapshot
+```
+
+Select any mission row in the dashboard to open its durable event timeline, or
+query it directly:
+
+```bash
+curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/events
 ```
 
 ## Verify the implementation

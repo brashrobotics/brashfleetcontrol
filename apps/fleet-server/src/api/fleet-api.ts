@@ -42,6 +42,11 @@ export class FleetApi {
         return json({ mission: dispatch.mission, dispatch }, 201);
       }
 
+      const missionEventsMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/events$/);
+      if (request.method === "GET" && missionEventsMatch) {
+        return json({ events: await this.core.getMissionEvents(decodeURIComponent(missionEventsMatch[1])) });
+      }
+
       const missionMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)$/);
       if (request.method === "GET" && missionMatch) {
         return json({ mission: await this.core.getMission(decodeURIComponent(missionMatch[1])) });

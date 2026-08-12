@@ -7,6 +7,7 @@ import { SimulatorAdapter } from "@brash/simulator-adapter";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
+  InMemoryMissionEventRepository,
   InMemoryMissionRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
@@ -17,6 +18,7 @@ import {
   robotFixture,
   transportMissionFixture,
 } from "@brash/test-kit";
+import { OutboxRetryWorker } from "../../apps/fleet-server/src/workers/outbox-retry-worker.js";
 
 class FailFirstDeliveryAdapter implements RobotAdapter {
   readonly adapterId = "fail-first-delivery";
@@ -50,11 +52,13 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
+    events: new InMemoryMissionEventRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
+    instanceId: "recovery-test",
   };
 
   const firstCore = new FleetCore(dependencies);
@@ -67,6 +71,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
   assert.equal(pendingBeforeRestart.attemptCount, 1);
   assert.equal(pendingBeforeRestart.command.commandId, "COMMAND-0001");
   await firstCore.stop();
+  clock.advance(1_000);
 
   const restartedCore = new FleetCore(dependencies);
   await restartedCore.start();
@@ -77,6 +82,46 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
   await restartedCore.stop();
 });
 
+test("the outbox worker retries a due command without restarting Fleet Core", async () => {
+  const clock = new ManualClock();
+  const dependencies = {
+    missions: new InMemoryMissionRepository(),
+    robots: new InMemoryRobotRepository(),
+    commands: new InMemoryCommandRepository(),
+    decisions: new InMemoryAssignmentDecisionRepository(),
+    events: new InMemoryMissionEventRepository(),
+    transactions: new InMemoryTransactionManager(),
+    clock,
+    ids: new SequentialIdGenerator(),
+    adapter: new FailFirstDeliveryAdapter(new SimulatorAdapter([
+      robotFixture({ robotId: "BR-WORKER-01" }),
+    ], { now: () => clock.now() })),
+    dispatchPolicy: new WeightedDispatchPolicy(),
+    instanceId: "outbox-worker-test",
+  };
+  const core = new FleetCore(dependencies);
+  await core.start();
+  const created = await core.createMission(transportMissionFixture());
+  const firstAttempt = await core.dispatchMission(created.missionId);
+  assert.equal(firstAttempt.mission.state, "ASSIGNED");
+
+  const worker = new OutboxRetryWorker(core, { onError: (error) => assert.fail(String(error)) });
+  assert.equal(await worker.runOnce(), 0);
+  clock.advance(1_000);
+  assert.equal(await worker.runOnce(), 1);
+  assert.equal((await core.getMission(created.missionId)).state, "DISPATCHED");
+  assert.equal((await dependencies.commands.listPending()).length, 0);
+
+  const events = await core.getMissionEvents(created.missionId);
+  assert.deepEqual(events.map((event) => event.type), [
+    "MISSION_QUEUED",
+    "MISSION_ASSIGNED",
+    "COMMAND_DELIVERY_FAILED",
+    "COMMAND_DISPATCHED",
+  ]);
+  await core.stop();
+});
+
 test("startup reconciliation does not overwrite a durable reservation with stale available telemetry", async () => {
   const clock = new ManualClock();
   const shared = {
@@ -84,10 +129,12 @@ test("startup reconciliation does not overwrite a durable reservation with stale
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
+    events: new InMemoryMissionEventRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
     dispatchPolicy: new WeightedDispatchPolicy(),
+    instanceId: "reconciliation-test",
   };
   const definition = robotFixture({ robotId: "BR-RECONCILE-01" });
   const firstCore = new FleetCore({

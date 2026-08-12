@@ -2,6 +2,9 @@ import type {
   AssignmentDecision,
   CommandReceipt,
   MissionCommand,
+  MissionEventType,
+  MissionEventView,
+  MissionState,
 } from "@brash/contracts";
 import type { Mission, Robot } from "@brash/domain";
 
@@ -30,16 +33,39 @@ export interface PendingCommand {
   lastError: string | null;
 }
 
+export interface CommandClaimOptions {
+  workerId: string;
+  claimedAt: Date;
+  leaseDurationMs: number;
+}
+
 export interface CommandRepository {
   enqueue(command: MissionCommand, createdAt: Date): Promise<void>;
-  listPending(): Promise<PendingCommand[]>;
+  claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null>;
+  claimPending(limit: number, options: CommandClaimOptions): Promise<PendingCommand[]>;
   recordAttempt(commandId: string, attemptedAt: Date): Promise<void>;
-  recordAttemptFailure(commandId: string, reason: string, attemptedAt: Date): Promise<void>;
+  recordAttemptFailure(commandId: string, reason: string, attemptedAt: Date, nextAttemptAt: Date): Promise<void>;
   recordReceipt(receipt: CommandReceipt): Promise<void>;
 }
 
 export interface AssignmentDecisionRepository {
   save(decision: AssignmentDecision, decidedAt: Date): Promise<void>;
+}
+
+export interface NewMissionEvent {
+  missionId: string;
+  type: MissionEventType;
+  state: MissionState;
+  robotId: string | null;
+  commandId: string | null;
+  message: string;
+  data?: Record<string, unknown>;
+  occurredAt: Date;
+}
+
+export interface MissionEventRepository {
+  append(event: NewMissionEvent): Promise<void>;
+  listByMission(missionId: string): Promise<MissionEventView[]>;
 }
 
 export interface TransactionManager {

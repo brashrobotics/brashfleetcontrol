@@ -4,6 +4,7 @@ import { PostgresDatabase } from "./postgres-database.js";
 import {
   PostgresAssignmentDecisionRepository,
   PostgresCommandRepository,
+  PostgresMissionEventRepository,
   PostgresMissionRepository,
   PostgresRobotRepository,
 } from "./postgres-repositories.js";
@@ -15,6 +16,7 @@ export class PostgresPersistence {
   readonly robots: PostgresRobotRepository;
   readonly commands: PostgresCommandRepository;
   readonly decisions: PostgresAssignmentDecisionRepository;
+  readonly events: PostgresMissionEventRepository;
   readonly transactions: PostgresTransactionManager;
   private readonly startupTimeoutMs: number;
 
@@ -25,6 +27,7 @@ export class PostgresPersistence {
     this.robots = new PostgresRobotRepository(this.database);
     this.commands = new PostgresCommandRepository(this.database);
     this.decisions = new PostgresAssignmentDecisionRepository(this.database);
+    this.events = new PostgresMissionEventRepository(this.database);
     this.transactions = new PostgresTransactionManager(this.database);
   }
 

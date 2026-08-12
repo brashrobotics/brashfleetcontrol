@@ -85,6 +85,7 @@ function createCore(
     robots: persistence.robots,
     commands: persistence.commands,
     decisions: persistence.decisions,
+    events: persistence.events,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -92,6 +93,7 @@ function createCore(
       robotFixture({ robotId }),
     ], { now: () => clock.now() }),
     dispatchPolicy: new WeightedDispatchPolicy(),
+    instanceId: `postgres-test-${idPrefix}`,
   });
 }
 

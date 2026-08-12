@@ -3,6 +3,7 @@ import { SimulatorAdapter } from "@brash/simulator-adapter";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
+  InMemoryMissionEventRepository,
   InMemoryMissionRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
@@ -40,18 +41,21 @@ export function createTestFleetSystem(options: { autoAdvance?: boolean } = {}) {
   const robots = new InMemoryRobotRepository();
   const commands = new InMemoryCommandRepository();
   const decisions = new InMemoryAssignmentDecisionRepository();
+  const events = new InMemoryMissionEventRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     missions,
     robots,
     commands,
     decisions,
+    events,
     transactions,
     clock,
     ids,
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
+    instanceId: "test-fleet-core",
   });
 
-  return { core, adapter, clock, ids, missions, robots, commands, decisions, transactions };
+  return { core, adapter, clock, ids, missions, robots, commands, decisions, events, transactions };
 }

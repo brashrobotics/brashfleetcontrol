@@ -9,6 +9,7 @@ import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulato
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
+  InMemoryMissionEventRepository,
   InMemoryMissionRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
@@ -65,11 +66,13 @@ export function createDevelopmentSystem() {
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
+    events: new InMemoryMissionEventRepository(),
     transactions: new InMemoryTransactionManager(),
     clock: new SystemClock(),
     ids: new RandomIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
+    instanceId: "fleet-server-memory",
   });
 
   return { core, api: new FleetApi(core), adapter };

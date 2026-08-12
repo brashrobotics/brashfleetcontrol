@@ -142,6 +142,14 @@
       </form>
     </dialog>
 
+    <dialog id="timeline-dialog" class="mission-dialog timeline-dialog">
+      <div class="timeline-shell">
+        <div class="dialog-head"><div><span>MISSION AUDIT TRAIL</span><h2 id="timeline-title">Mission timeline</h2></div><button type="button" id="close-timeline" aria-label="Close">×</button></div>
+        <p class="dialog-copy">Durable state transitions and robot command delivery attempts, ordered by observation time.</p>
+        <div id="timeline-list" class="timeline-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" defer></script>
   </body>

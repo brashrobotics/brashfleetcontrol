@@ -35,6 +35,19 @@ test("API creates, assigns, dispatches, executes, and completes a transport miss
   const completed = await missionResponse.json() as { mission: { state: string } };
   assert.equal(completed.mission.state, "COMPLETED");
 
+  const eventsResponse = await api.fetch(new Request(
+    `http://fleet.test/api/v1/missions/${created.mission.missionId}/events`,
+  ));
+  assert.equal(eventsResponse.status, 200);
+  const timeline = await eventsResponse.json() as { events: Array<{ type: string }> };
+  assert.deepEqual(timeline.events.map((event) => event.type), [
+    "MISSION_QUEUED",
+    "MISSION_ASSIGNED",
+    "COMMAND_DISPATCHED",
+    "MISSION_EXECUTING",
+    "MISSION_COMPLETED",
+  ]);
+
   const snapshotResponse = await api.fetch(new Request("http://fleet.test/api/v1/fleet/snapshot"));
   const snapshot = await snapshotResponse.json() as {
     robots: Array<{ robotId: string; state: { availability: string } }>;

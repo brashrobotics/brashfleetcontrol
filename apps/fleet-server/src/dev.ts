@@ -4,6 +4,7 @@ import { loadPersistenceConfig } from "@brash/config";
 import { createDevelopmentSystem } from "./bootstrap/create-development-system.js";
 import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
 import { serveFleetUi } from "./http/static-fleet-ui.js";
+import { OutboxRetryWorker } from "./workers/outbox-retry-worker.js";
 
 const persistenceConfig = loadPersistenceConfig();
 const postgresSystem = persistenceConfig.mode === "postgres"
@@ -12,6 +13,8 @@ const postgresSystem = persistenceConfig.mode === "postgres"
 const system = postgresSystem ?? createDevelopmentSystem();
 const { core, api } = system;
 await core.start();
+const outboxWorker = new OutboxRetryWorker(core);
+outboxWorker.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
 const server = createServer(async (incoming, outgoing) => {
@@ -38,6 +41,7 @@ const server = createServer(async (incoming, outgoing) => {
 });
 
 async function shutdown(): Promise<void> {
+  outboxWorker.stop();
   await core.stop();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());

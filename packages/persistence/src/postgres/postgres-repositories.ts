@@ -1,7 +1,10 @@
 import type {
   AssignmentDecisionRepository,
+  CommandClaimOptions,
   CommandRepository,
+  MissionEventRepository,
   MissionRepository,
+  NewMissionEvent,
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
@@ -10,6 +13,8 @@ import type {
   AssignmentDecision,
   CommandReceipt,
   MissionCommand,
+  MissionEventType,
+  MissionEventView,
 } from "@brash/contracts";
 import {
   Mission,
@@ -62,6 +67,18 @@ interface CommandRow {
   attempt_count: number;
   last_attempt_at: Date | null;
   last_error: string | null;
+}
+
+interface MissionEventRow {
+  event_id: string;
+  mission_id: string;
+  event_type: MissionEventType;
+  mission_state: MissionState;
+  robot_id: string | null;
+  command_id: string | null;
+  message: string;
+  event_data: Record<string, unknown>;
+  occurred_at: Date;
 }
 
 const MISSION_COLUMNS = `
@@ -219,25 +236,60 @@ export class PostgresCommandRepository implements CommandRepository {
   async enqueue(command: MissionCommand, createdAt: Date): Promise<void> {
     await this.database.query(`
       INSERT INTO command_outbox (
-        command_id, mission_id, robot_id, command_payload, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4::jsonb, $5, $5)
+        command_id, mission_id, robot_id, command_payload,
+        next_attempt_at, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4::jsonb, $5, $5, $5)
       ON CONFLICT (command_id) DO NOTHING
     `, [command.commandId, command.missionId, command.robotId, JSON.stringify(command), createdAt]);
   }
 
-  async listPending(): Promise<PendingCommand[]> {
+  async claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null> {
     const result = await this.database.query<CommandRow>(`
-      SELECT command_payload, attempt_count, last_attempt_at, last_error
-      FROM command_outbox
-      WHERE status = 'PENDING'
-      ORDER BY created_at, command_id
-    `);
-    return result.rows.map((row) => ({
-      command: structuredClone(row.command_payload),
-      attemptCount: row.attempt_count,
-      lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
-      lastError: row.last_error,
-    }));
+      UPDATE command_outbox
+      SET lease_owner = $2,
+          lease_expires_at = $3,
+          updated_at = $4
+      WHERE command_id = $1
+        AND status = 'PENDING'
+        AND next_attempt_at <= $4
+        AND (lease_expires_at IS NULL OR lease_expires_at <= $4)
+      RETURNING command_payload, attempt_count, last_attempt_at, last_error
+    `, [
+      commandId,
+      options.workerId,
+      new Date(options.claimedAt.getTime() + options.leaseDurationMs),
+      options.claimedAt,
+    ]);
+    return result.rows[0] ? commandFromRow(result.rows[0]) : null;
+  }
+
+  async claimPending(limit: number, options: CommandClaimOptions): Promise<PendingCommand[]> {
+    const result = await this.database.query<CommandRow>(`
+      WITH claimable AS (
+        SELECT command_id
+        FROM command_outbox
+        WHERE status = 'PENDING'
+          AND next_attempt_at <= $1
+          AND (lease_expires_at IS NULL OR lease_expires_at <= $1)
+        ORDER BY next_attempt_at, created_at, command_id
+        FOR UPDATE SKIP LOCKED
+        LIMIT $2
+      )
+      UPDATE command_outbox AS command
+      SET lease_owner = $3,
+          lease_expires_at = $4,
+          updated_at = $1
+      FROM claimable
+      WHERE command.command_id = claimable.command_id
+      RETURNING command.command_payload, command.attempt_count,
+                command.last_attempt_at, command.last_error
+    `, [
+      options.claimedAt,
+      limit,
+      options.workerId,
+      new Date(options.claimedAt.getTime() + options.leaseDurationMs),
+    ]);
+    return result.rows.map(commandFromRow);
   }
 
   async recordAttempt(commandId: string, attemptedAt: Date): Promise<void> {
@@ -251,14 +303,17 @@ export class PostgresCommandRepository implements CommandRepository {
     `, [commandId, attemptedAt]);
   }
 
-  async recordAttemptFailure(commandId: string, reason: string, attemptedAt: Date): Promise<void> {
+  async recordAttemptFailure(commandId: string, reason: string, attemptedAt: Date, nextAttemptAt: Date): Promise<void> {
     await this.database.query(`
       UPDATE command_outbox
       SET last_attempt_at = $3,
           last_error = $2,
+          next_attempt_at = $4,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
           updated_at = $3
       WHERE command_id = $1 AND status = 'PENDING'
-    `, [commandId, reason, attemptedAt]);
+    `, [commandId, reason, attemptedAt, nextAttemptAt]);
   }
 
   async recordReceipt(receipt: CommandReceipt): Promise<void> {
@@ -267,8 +322,10 @@ export class PostgresCommandRepository implements CommandRepository {
       SET status = $2,
           receipt = $3::jsonb,
           last_error = $4,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
           updated_at = $5
-      WHERE command_id = $1
+      WHERE command_id = $1 AND status = 'PENDING'
     `, [
       receipt.commandId,
       receipt.status,
@@ -298,9 +355,61 @@ export class PostgresAssignmentDecisionRepository implements AssignmentDecisionR
   }
 }
 
+export class PostgresMissionEventRepository implements MissionEventRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async append(event: NewMissionEvent): Promise<void> {
+    await this.database.query(`
+      INSERT INTO mission_events (
+        mission_id, event_type, mission_state, robot_id, command_id,
+        message, event_data, occurred_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+    `, [
+      event.missionId,
+      event.type,
+      event.state,
+      event.robotId,
+      event.commandId,
+      event.message,
+      JSON.stringify(event.data ?? {}),
+      event.occurredAt,
+    ]);
+  }
+
+  async listByMission(missionId: string): Promise<MissionEventView[]> {
+    const result = await this.database.query<MissionEventRow>(`
+      SELECT event_id, mission_id, event_type, mission_state, robot_id,
+             command_id, message, event_data, occurred_at
+      FROM mission_events
+      WHERE mission_id = $1
+      ORDER BY occurred_at, event_id
+    `, [missionId]);
+    return result.rows.map((row) => ({
+      eventId: `event-${row.event_id}`,
+      missionId: row.mission_id,
+      type: row.event_type,
+      state: row.mission_state,
+      robotId: row.robot_id,
+      commandId: row.command_id,
+      message: row.message,
+      data: structuredClone(row.event_data),
+      occurredAt: new Date(row.occurred_at).toISOString(),
+    }));
+  }
+}
+
 function lockClause(options?: RepositoryReadOptions): string {
   if (!options?.forUpdate) return "";
   return options.skipLocked ? " FOR UPDATE SKIP LOCKED" : " FOR UPDATE";
+}
+
+function commandFromRow(row: CommandRow): PendingCommand {
+  return {
+    command: structuredClone(row.command_payload),
+    attemptCount: row.attempt_count,
+    lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
+    lastError: row.last_error,
+  };
 }
 
 function missionFromRow(row: MissionRow): Mission {

@@ -162,7 +162,7 @@ function renderRobotDetail() {
 
 function renderMissions() {
   $("#mission-table").innerHTML = state.missions.map((mission) => `
-    <tr>
+    <tr class="mission-row" data-mission-id="${escapeHtml(mission.id)}" tabindex="0" aria-label="Open timeline for mission ${escapeHtml(mission.id)}">
       <td>${escapeHtml(mission.id)}</td>
       <td>${escapeHtml(mission.robot)}</td>
       <td>${escapeHtml(mission.from)}</td>
@@ -171,6 +171,38 @@ function renderMissions() {
       <td><span class="table-progress ${mission.status}"><i style="width:${Number(mission.progress)}%"></i></span>${Math.round(mission.progress)}%</td>
       <td>${escapeHtml(mission.createdAt)}</td>
     </tr>`).join("") || '<tr><td colspan="7" style="color:var(--muted)">No missions yet. Create the first transport mission.</td></tr>';
+}
+
+function formatEventType(type) {
+  return String(type).toLowerCase().split("_").map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
+}
+
+async function showMissionTimeline(missionId) {
+  if (fleetMode !== "core") {
+    showToast("Mission timelines are available when Fleet Core is connected");
+    return;
+  }
+  const dialog = $("#timeline-dialog");
+  $("#timeline-title").textContent = missionId;
+  $("#timeline-list").innerHTML = '<p class="timeline-empty">Loading mission events…</p>';
+  dialog.showModal();
+  try {
+    const response = await fetch(`/api/v1/missions/${encodeURIComponent(missionId)}/events`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Mission timeline unavailable");
+    $("#timeline-list").innerHTML = result.events.map((event) => `
+      <article class="timeline-event">
+        <i></i>
+        <div>
+          <div class="timeline-event-head"><strong>${escapeHtml(formatEventType(event.type))}</strong><span>${escapeHtml(event.state)}</span></div>
+          <p>${escapeHtml(event.message)}</p>
+          <small>${escapeHtml(event.robotId || "Fleet Core")}${event.commandId ? ` · ${escapeHtml(event.commandId)}` : ""}</small>
+        </div>
+        <time>${escapeHtml(new Date(event.occurredAt).toLocaleString("en-GB"))}</time>
+      </article>`).join("") || '<p class="timeline-empty">No events have been recorded for this mission.</p>';
+  } catch (error) {
+    $("#timeline-list").innerHTML = `<p class="timeline-empty">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 function renderAlerts() {
@@ -250,6 +282,18 @@ function populateRobotSelect() {
 $("#new-mission-button").addEventListener("click", () => { populateRobotSelect(); if ($("#mission-robot").options.length) $("#mission-dialog").showModal(); });
 $("#close-dialog").addEventListener("click", () => $("#mission-dialog").close());
 $("#cancel-dialog").addEventListener("click", () => $("#mission-dialog").close());
+$("#close-timeline").addEventListener("click", () => $("#timeline-dialog").close());
+$("#mission-table").addEventListener("click", (event) => {
+  const row = event.target.closest(".mission-row");
+  if (row) void showMissionTimeline(row.dataset.missionId);
+});
+$("#mission-table").addEventListener("keydown", (event) => {
+  const row = event.target.closest(".mission-row");
+  if (row && ["Enter", " "].includes(event.key)) {
+    event.preventDefault();
+    void showMissionTimeline(row.dataset.missionId);
+  }
+});
 $("#mission-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const selectedRobot = state.robots.find((robot) => robot.id === $("#mission-robot").value);

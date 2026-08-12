@@ -170,3 +170,26 @@ export interface DispatchResult {
   receipt: CommandReceipt | null;
 }
 
+export type MissionEventType =
+  | "MISSION_QUEUED"
+  | "ASSIGNMENT_NOT_FOUND"
+  | "MISSION_ASSIGNED"
+  | "COMMAND_DELIVERY_FAILED"
+  | "COMMAND_DISPATCHED"
+  | "COMMAND_REJECTED"
+  | "MISSION_EXECUTING"
+  | "MISSION_COMPLETED"
+  | "MISSION_FAILED"
+  | "MISSION_CANCELLED";
+
+export interface MissionEventView {
+  eventId: string;
+  missionId: string;
+  type: MissionEventType;
+  state: MissionState;
+  robotId: string | null;
+  commandId: string | null;
+  message: string;
+  data: Record<string, unknown>;
+  occurredAt: string;
+}
