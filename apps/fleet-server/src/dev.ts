@@ -1,8 +1,15 @@
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
+import { loadPersistenceConfig } from "@brash/config";
 import { createDevelopmentSystem } from "./bootstrap/create-development-system.js";
+import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
 
-const { core, api } = createDevelopmentSystem();
+const persistenceConfig = loadPersistenceConfig();
+const postgresSystem = persistenceConfig.mode === "postgres"
+  ? await createPostgresDevelopmentSystem(persistenceConfig.database!)
+  : null;
+const system = postgresSystem ?? createDevelopmentSystem();
+const { core, api } = system;
 await core.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
@@ -23,12 +30,17 @@ const server = createServer(async (incoming, outgoing) => {
 
 async function shutdown(): Promise<void> {
   await core.stop();
-  server.close();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+  await postgresSystem?.persistence.close();
 }
 
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGINT", () => void shutdown());
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`BRASH Fleet Core ready: http://127.0.0.1:${port}/api/v1/health`);
+  console.log(
+    `BRASH Fleet Core ready (${persistenceConfig.mode}): http://127.0.0.1:${port}/api/v1/health`,
+  );
 });

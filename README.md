@@ -17,12 +17,14 @@ What works today:
 - Stop and resume demonstration
 - Local Node.js server with HTTP/SSE data contracts
 - Automated tests for the server API
+- Optional PostgreSQL persistence for Fleet Core
+- Atomic multi-process robot/mission reservation
+- Durable command outbox with restart recovery
 
 What is not production-ready yet:
 
 - Motor, safety PLC, and sensor integrations
 - Real localization and navigation
-- Persistent database
 - Multi-robot traffic reservations
 - Authentication and role-based authorization
 - Device certificates, signed OTA updates, and rollback

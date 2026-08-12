@@ -17,3 +17,10 @@ Repositories should not decide mission transitions or robot eligibility.
 ## Completion expectations
 
 Document public interfaces, validate external inputs, add focused tests, and define logs/metrics before considering this area production-ready.
+
+## Current implementation
+
+`postgres/postgres-repositories.ts` maps database rows to restored domain
+entities and implements robot, mission, decision, and command repositories.
+Domain transitions remain in `packages/domain`; repositories only hydrate and
+save state.

@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: brash_fleet
+      POSTGRES_USER: brash
+      POSTGRES_PASSWORD: brash
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brash -d brash_fleet"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - brash-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  brash-postgres-data:

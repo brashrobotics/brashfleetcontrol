@@ -73,6 +73,27 @@ export class Robot {
     return new Robot(registration, telemetry);
   }
 
+  static restore(snapshot: RobotSnapshot): Robot {
+    return Robot.register({
+      robotId: snapshot.robotId,
+      displayName: snapshot.displayName,
+      vendor: snapshot.vendor,
+      model: snapshot.model,
+      capabilities: [...snapshot.capabilities],
+      maxPayloadKg: snapshot.maxPayloadKg,
+      allowedZones: [...snapshot.allowedZones],
+    }, {
+      robotId: snapshot.robotId,
+      sequence: snapshot.sequence,
+      observedAt: snapshot.observedAt,
+      connection: snapshot.connection,
+      availability: snapshot.availability,
+      batteryPercent: snapshot.batteryPercent,
+      pose: { ...snapshot.pose },
+      activeMissionId: snapshot.activeMissionId,
+    });
+  }
+
   get connection(): RobotConnection {
     return this.telemetry.connection;
   }
@@ -168,4 +189,3 @@ export class Robot {
     }
   }
 }
-

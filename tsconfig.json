@@ -17,6 +17,7 @@
       "@brash/robot-adapter-sdk": ["./packages/robot-adapter-sdk/src/index.ts"],
       "@brash/simulator-adapter": ["./packages/adapters/simulator/src/index.ts"],
       "@brash/persistence": ["./packages/persistence/src/index.ts"],
+      "@brash/config": ["./packages/config/src/index.ts"],
       "@brash/test-kit": ["./packages/test-kit/src/index.ts"]
     }
   },

@@ -1,6 +1,8 @@
 import { FleetCore, WeightedDispatchPolicy } from "@brash/application";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import {
+  InMemoryAssignmentDecisionRepository,
+  InMemoryCommandRepository,
   InMemoryMissionRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
@@ -36,10 +38,14 @@ export function createTestFleetSystem(options: { autoAdvance?: boolean } = {}) {
   });
   const missions = new InMemoryMissionRepository();
   const robots = new InMemoryRobotRepository();
+  const commands = new InMemoryCommandRepository();
+  const decisions = new InMemoryAssignmentDecisionRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     missions,
     robots,
+    commands,
+    decisions,
     transactions,
     clock,
     ids,
@@ -47,6 +53,5 @@ export function createTestFleetSystem(options: { autoAdvance?: boolean } = {}) {
     dispatchPolicy: new WeightedDispatchPolicy(),
   });
 
-  return { core, adapter, clock, ids, missions, robots, transactions };
+  return { core, adapter, clock, ids, missions, robots, commands, decisions, transactions };
 }
-

@@ -15,11 +15,45 @@ The existing operator demo remains available at `http://127.0.0.1:4173`.
 
 ## Start the new Fleet Core API
 
+The default mode keeps data in memory and is convenient for fast development:
+
 ```bash
 npm run dev:core
 ```
 
 The API starts at `http://127.0.0.1:4273`.
+
+## Start Fleet Core with PostgreSQL
+
+Start PostgreSQL and copy the documented development configuration:
+
+```bash
+docker compose up -d postgres
+cp .env.example .env
+set -a
+source .env
+set +a
+npm run db:migrate
+npm run dev:core:postgres
+```
+
+Fleet Core also selects PostgreSQL automatically when `DATABASE_URL` is set.
+The migration runner is safe to run more than once and rejects changes to an
+already-applied migration.
+
+PostgreSQL persists:
+
+- Robot registration and last known state.
+- Mission lifecycle and robot assignment.
+- Every dispatch decision and candidate evaluation.
+- Pending commands, delivery attempts, and adapter receipts.
+
+Robot and mission reservation is committed in one database transaction.
+Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
+Fleet Core instances cannot reserve the same robot. A command is added to the
+outbox in that same transaction. Pending commands are retried with the same
+`commandId` when Fleet Core restarts, so adapters must implement idempotent
+command handling.
 
 ## Create and automatically dispatch a transport mission
 
@@ -68,7 +102,6 @@ curl http://127.0.0.1:4273/api/v1/fleet/snapshot
 ```bash
 npm run typecheck
 npm run test:core
+npm run test:postgres # requires TEST_DATABASE_URL
 npm run build
 ```
-
-The first vertical slice currently uses in-memory repositories. Restarting Fleet Core resets its state. PostgreSQL persistence is the next infrastructure milestone.

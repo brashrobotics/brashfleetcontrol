@@ -85,6 +85,25 @@ export class Mission {
     return new Mission(props);
   }
 
+  static restore(snapshot: MissionSnapshot): Mission {
+    const mission = Mission.create({
+      missionId: snapshot.missionId,
+      externalReference: snapshot.externalReference,
+      priority: snapshot.priority,
+      requiredCapabilities: [...snapshot.requiredCapabilities],
+      payloadKg: snapshot.payloadKg,
+      pickup: { ...snapshot.pickup },
+      dropoff: { ...snapshot.dropoff },
+      createdAt: snapshot.createdAt,
+    });
+    mission.currentState = snapshot.state;
+    mission.currentAssignedRobotId = snapshot.assignedRobotId;
+    mission.currentCommandId = snapshot.commandId;
+    mission.currentUpdatedAt = new Date(snapshot.updatedAt);
+    mission.currentFailureReason = snapshot.failureReason;
+    return mission;
+  }
+
   get state(): MissionState {
     return this.currentState;
   }
@@ -202,4 +221,3 @@ export class Mission {
     this.currentUpdatedAt = new Date(at);
   }
 }
-

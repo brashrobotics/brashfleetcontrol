@@ -7,6 +7,8 @@ import {
 import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } from "@brash/contracts";
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
+  InMemoryAssignmentDecisionRepository,
+  InMemoryCommandRepository,
   InMemoryMissionRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
@@ -47,16 +49,22 @@ function simulatorRobot(input: {
   return { descriptor, state };
 }
 
-export function createDevelopmentSystem() {
-  const adapter = new SimulatorAdapter([
+export function createDevelopmentAdapter(): SimulatorAdapter {
+  return new SimulatorAdapter([
     simulatorRobot({ robotId: "BR-01", displayName: "Atlas", capabilities: ["pallet_transport"], maxPayloadKg: 500, batteryPercent: 70, x: 40, y: 5 }),
     simulatorRobot({ robotId: "BR-02", displayName: "Nova", capabilities: ["box_transport"], maxPayloadKg: 100, batteryPercent: 90, x: 10, y: 5 }),
     simulatorRobot({ robotId: "BR-03", displayName: "Kite", capabilities: ["pallet_transport"], maxPayloadKg: 800, batteryPercent: 35, x: 70, y: 65 }),
   ], { autoAdvance: true });
+}
+
+export function createDevelopmentSystem() {
+  const adapter = createDevelopmentAdapter();
 
   const core = new FleetCore({
     missions: new InMemoryMissionRepository(),
     robots: new InMemoryRobotRepository(),
+    commands: new InMemoryCommandRepository(),
+    decisions: new InMemoryAssignmentDecisionRepository(),
     transactions: new InMemoryTransactionManager(),
     clock: new SystemClock(),
     ids: new RandomIdGenerator(),
@@ -66,4 +74,3 @@ export function createDevelopmentSystem() {
 
   return { core, api: new FleetApi(core), adapter };
 }
-
