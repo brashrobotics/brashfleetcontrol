@@ -52,6 +52,7 @@ let zoom = 1;
 let toastTimer;
 let fleetMode = "preview";
 let pollTimer;
+let timelineMissionId = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -377,9 +378,16 @@ async function showMissionTimeline(missionId) {
     return;
   }
   const dialog = $("#timeline-dialog");
+  timelineMissionId = missionId;
+  const mission = state.missions.find((entry) => entry.id === missionId);
+  const cancelButton = $("#cancel-mission-button");
+  const cancellable = mission && ["QUEUED", "ASSIGNED", "DISPATCHED", "EXECUTING", "CANCELLING"].includes(mission.state);
+  cancelButton.hidden = !cancellable;
+  cancelButton.disabled = false;
+  cancelButton.textContent = mission?.state === "CANCELLING" ? "Retry cancellation" : "Cancel mission";
   $("#timeline-title").textContent = missionId;
   $("#timeline-list").innerHTML = '<p class="timeline-empty">Loading mission events…</p>';
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal();
   try {
     const response = await fetch(`/api/v1/missions/${encodeURIComponent(missionId)}/events`, { cache: "no-store" });
     const result = await response.json();
@@ -495,6 +503,22 @@ $("#new-mission-button").addEventListener("click", () => { populateRobotSelect()
 $("#close-dialog").addEventListener("click", () => $("#mission-dialog").close());
 $("#cancel-dialog").addEventListener("click", () => $("#mission-dialog").close());
 $("#close-timeline").addEventListener("click", () => $("#timeline-dialog").close());
+$("#cancel-mission-button").addEventListener("click", async () => {
+  const missionId = timelineMissionId;
+  if (!missionId || !confirm(`Cancel mission ${missionId}? The robot will receive a controlled mission-cancellation request.`)) return;
+  const button = $("#cancel-mission-button");
+  button.disabled = true;
+  try {
+    const result = await post(`/api/v1/missions/${encodeURIComponent(missionId)}/cancel`);
+    const mission = result.cancellation.mission;
+    showToast(mission.state === "CANCELLED" ? `${missionId} cancelled` : `${missionId} cancellation is awaiting confirmation`);
+    await refreshCoreSnapshot();
+    await showMissionTimeline(missionId);
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
+  }
+});
 $("#mission-table").addEventListener("click", (event) => {
   const row = event.target.closest(".mission-row");
   if (row) void showMissionTimeline(row.dataset.missionId);

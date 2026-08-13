@@ -7,6 +7,7 @@ import {
   type FleetRecoveryStatusView,
   type FleetSnapshot,
   type MapTopologyView,
+  type MissionCancellationResult,
   type MissionCommand,
   type MissionEventType,
   type MissionEventView,
@@ -80,6 +81,11 @@ interface AssignmentPreparation {
 interface CommandDeliveryResult {
   mission: Mission;
   receipt: CommandReceipt | null;
+}
+
+interface CancellationPreparation {
+  mission: Mission;
+  remoteCommand: { robotId: string; commandId: string } | null;
 }
 
 export class FleetCore {
@@ -311,6 +317,133 @@ export class FleetCore {
       receipt: delivery.receipt,
       route: await this.getMissionRoute(missionId),
     };
+  }
+
+  async cancelMission(missionId: string): Promise<MissionCancellationResult> {
+    this.assertStarted();
+    const preparation = await this.dependencies.transactions.runExclusive(async (): Promise<CancellationPreparation> => {
+      const mission = await this.requireMission(missionId, true);
+      const now = this.dependencies.clock.now();
+
+      if (mission.state === "CANCELLED") return { mission, remoteCommand: null };
+      if (mission.state === "COMPLETED" || mission.state === "FAILED") {
+        throw new DomainError(
+          "MISSION_NOT_CANCELLABLE",
+          `Mission ${missionId} is already ${mission.state.toLowerCase()}.`,
+        );
+      }
+      if (mission.state === "RECOVERY_REQUIRED") {
+        throw new DomainError(
+          "MISSION_RECOVERY_REQUIRED",
+          `Mission ${missionId} must complete robot recovery before cancellation can be confirmed.`,
+        );
+      }
+
+      if (mission.state === "QUEUED") {
+        mission.cancelQueued(now);
+        await this.dependencies.missions.save(mission);
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_CANCELLED",
+          "Queued mission cancelled before robot assignment.",
+          now,
+        );
+        return { mission, remoteCommand: null };
+      }
+
+      if (mission.state === "ASSIGNED") {
+        const robotId = mission.assignedRobotId;
+        if (!robotId) throw new DomainError("MISSION_ROBOT_MISSING", `Mission ${missionId} has no assigned robot.`);
+        const robot = await this.requireRobot(robotId, true);
+        mission.requestCancellation(now);
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_CANCELLATION_REQUESTED",
+          "Mission cancellation requested before command acceptance.",
+          now,
+        );
+        await this.dependencies.commands.cancelPendingByMission(
+          mission.missionId,
+          now,
+          "Mission cancelled before the robot accepted its command.",
+        );
+        mission.cancel("", now);
+        robot.release(mission.missionId, now);
+        await this.dependencies.missions.save(mission);
+        await this.dependencies.robots.save(robot);
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_CANCELLED",
+          "Mission cancelled locally before command acceptance.",
+          now,
+        );
+        await this.releaseTrafficPlan(mission, now, "Mission cancelled; traffic reservations released.");
+        return { mission, remoteCommand: null };
+      }
+
+      if (mission.state === "DISPATCHED" || mission.state === "EXECUTING") {
+        mission.requestCancellation(now);
+        await this.dependencies.missions.save(mission);
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_CANCELLATION_REQUESTED",
+          `Cancellation requested from robot ${mission.assignedRobotId}.`,
+          now,
+        );
+      }
+
+      if (mission.state !== "CANCELLING" || !mission.assignedRobotId || !mission.commandId) {
+        throw new DomainError(
+          "MISSION_CANCELLATION_INVALID",
+          `Mission ${missionId} has no accepted robot command to cancel.`,
+        );
+      }
+
+      return {
+        mission,
+        remoteCommand: { robotId: mission.assignedRobotId, commandId: mission.commandId },
+      };
+    });
+
+    if (!preparation.remoteCommand) {
+      return { mission: missionToView(preparation.mission), receipt: null };
+    }
+
+    let receipt: CommandReceipt | null = null;
+    try {
+      receipt = await this.dependencies.adapter.cancelMission(
+        preparation.remoteCommand.robotId,
+        preparation.remoteCommand.commandId,
+      );
+    } catch (error) {
+      const failedAt = this.dependencies.clock.now();
+      await this.dependencies.transactions.runExclusive(async () => {
+        const mission = await this.requireMission(missionId, true);
+        if (mission.state !== "CANCELLING") return;
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_CANCELLATION_DELIVERY_FAILED",
+          error instanceof Error ? error.message : "Robot adapter could not receive the cancellation request.",
+          failedAt,
+        );
+      });
+    }
+
+    if (receipt?.status === "REJECTED") {
+      const rejectedAt = new Date(receipt.receivedAt);
+      await this.dependencies.transactions.runExclusive(async () => {
+        const mission = await this.requireMission(missionId, true);
+        if (mission.state !== "CANCELLING") return;
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_CANCELLATION_REJECTED",
+          receipt?.reason ?? "Robot rejected the cancellation request.",
+          rejectedAt,
+        );
+      });
+    }
+
+    return { mission: await this.getMission(missionId), receipt };
   }
 
   async getMission(missionId: string): Promise<MissionView> {
@@ -576,20 +709,33 @@ export class FleetCore {
         );
       }
 
+      if (mission.state === "CANCELLED" || mission.state === "COMPLETED" || mission.state === "FAILED") {
+        await this.dependencies.robots.save(robot);
+        return;
+      }
+
       if (event.status === "EXECUTING") {
-        if (mission.state !== "EXECUTING") {
+        if (mission.state === "CANCELLING") {
+          if (robot.availability === "RESERVED") {
+            robot.markExecuting(event.missionId, observedAt);
+            await this.appendMissionEvent(
+              mission,
+              "MISSION_EXECUTING",
+              "Robot began execution while cancellation confirmation was pending.",
+              observedAt,
+            );
+          }
+        } else if (mission.state !== "EXECUTING") {
           mission.markExecuting(event.commandId, observedAt);
           robot.markExecuting(event.missionId, observedAt);
           await this.appendMissionEvent(mission, "MISSION_EXECUTING", "Robot started mission execution.", observedAt);
         }
       } else if (event.status === "COMPLETED") {
-        if (mission.state === "COMPLETED") return;
         mission.complete(event.commandId, observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(mission, "MISSION_COMPLETED", "Robot completed the mission.", observedAt);
         await this.releaseTrafficPlan(mission, observedAt, "Mission completed; traffic reservations released.");
       } else if (event.status === "FAILED") {
-        if (mission.state === "FAILED") return;
         mission.fail(event.commandId, event.reason ?? "Robot reported mission failure.", observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(
@@ -600,7 +746,6 @@ export class FleetCore {
         );
         await this.releaseTrafficPlan(mission, observedAt, "Mission failed; traffic reservations released.");
       } else {
-        if (mission.state === "CANCELLED") return;
         if (mission.state !== "CANCELLING") mission.requestCancellation(observedAt);
         mission.cancel(event.commandId, observedAt);
         robot.release(event.missionId, observedAt);

@@ -279,6 +279,11 @@ export interface DispatchResult {
   route: TrafficPlanView | null;
 }
 
+export interface MissionCancellationResult {
+  mission: MissionView;
+  receipt: CommandReceipt | null;
+}
+
 export type MissionEventType =
   | "MISSION_QUEUED"
   | "ASSIGNMENT_NOT_FOUND"
@@ -295,6 +300,9 @@ export type MissionEventType =
   | "COMMAND_DELIVERY_FAILED"
   | "COMMAND_DISPATCHED"
   | "COMMAND_REJECTED"
+  | "MISSION_CANCELLATION_REQUESTED"
+  | "MISSION_CANCELLATION_DELIVERY_FAILED"
+  | "MISSION_CANCELLATION_REJECTED"
   | "MISSION_EXECUTING"
   | "MISSION_COMPLETED"
   | "MISSION_FAILED"

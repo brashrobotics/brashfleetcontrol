@@ -83,6 +83,12 @@ export class FleetApi {
         return json({ dispatch: await this.core.dispatchMission(decodeURIComponent(dispatchMatch[1])) });
       }
 
+      const cancellationMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/cancel$/);
+      if (request.method === "POST" && cancellationMatch) {
+        const cancellation = await this.core.cancelMission(decodeURIComponent(cancellationMatch[1]));
+        return json({ cancellation }, cancellation.mission.state === "CANCELLED" ? 200 : 202);
+      }
+
       return json({ error: { code: "NOT_FOUND", message: "Fleet API endpoint was not found." } }, 404);
     } catch (error) {
       return this.mapError(error);

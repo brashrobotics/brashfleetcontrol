@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.4.0
-  description: Vendor-independent mission, traffic reservation, robot liveness, and recovery API.
+  version: 0.5.0
+  description: Vendor-independent mission, traffic reservation, robot liveness, recovery, and operator control API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -151,6 +151,32 @@ paths:
                 required: [dispatch]
                 properties:
                   dispatch: { $ref: "#/components/schemas/DispatchResult" }
+  /api/v1/missions/{missionId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    post:
+      operationId: cancelMission
+      responses:
+        "200":
+          description: Mission cancellation completed or was already completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cancellation]
+                properties:
+                  cancellation: { $ref: "#/components/schemas/MissionCancellationResult" }
+        "202":
+          description: Cancellation delivery was attempted and awaits robot confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cancellation]
+                properties:
+                  cancellation: { $ref: "#/components/schemas/MissionCancellationResult" }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/missions/{missionId}/events:
     parameters:
       - $ref: "#/components/parameters/MissionId"
@@ -286,7 +312,7 @@ components:
         missionId: { type: string }
         type:
           type: string
-          enum: [MISSION_QUEUED, ASSIGNMENT_NOT_FOUND, MISSION_ASSIGNED, ROUTE_RESERVED, ROUTE_DELAYED, ROUTE_RELEASED, ROBOT_CONNECTION_DEGRADED, ROBOT_OFFLINE, MISSION_RECOVERY_REQUIRED, MISSION_RECOVERED, MISSION_RECOVERY_REQUEUED, TRAFFIC_SAFETY_HOLD, COMMAND_DELIVERY_FAILED, COMMAND_DISPATCHED, COMMAND_REJECTED, MISSION_EXECUTING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED]
+          enum: [MISSION_QUEUED, ASSIGNMENT_NOT_FOUND, MISSION_ASSIGNED, ROUTE_RESERVED, ROUTE_DELAYED, ROUTE_RELEASED, ROBOT_CONNECTION_DEGRADED, ROBOT_OFFLINE, MISSION_RECOVERY_REQUIRED, MISSION_RECOVERED, MISSION_RECOVERY_REQUEUED, TRAFFIC_SAFETY_HOLD, COMMAND_DELIVERY_FAILED, COMMAND_DISPATCHED, COMMAND_REJECTED, MISSION_CANCELLATION_REQUESTED, MISSION_CANCELLATION_DELIVERY_FAILED, MISSION_CANCELLATION_REJECTED, MISSION_EXECUTING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED]
         state:
           type: string
           enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, RECOVERY_REQUIRED, CANCELLING, CANCELLED, COMPLETED, FAILED]
@@ -342,6 +368,15 @@ components:
         route:
           oneOf:
             - { $ref: "#/components/schemas/TrafficPlan" }
+            - { type: "null" }
+    MissionCancellationResult:
+      type: object
+      required: [mission, receipt]
+      properties:
+        mission: { $ref: "#/components/schemas/Mission" }
+        receipt:
+          oneOf:
+            - { $ref: "#/components/schemas/CommandReceipt" }
             - { type: "null" }
     MapNode:
       type: object

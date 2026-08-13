@@ -144,3 +144,48 @@ test("API does not dispatch an external mission reference twice", async () => {
   assert.equal((await core.getSnapshot()).missions.length, 1);
   await core.stop();
 });
+
+test("API cancels queued missions locally and dispatched missions through the adapter", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+
+  const queuedResponse = await api.fetch(new Request("http://fleet.test/api/v1/missions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(transportMissionFixture({ autoDispatch: false, externalReference: "CANCEL-QUEUED" })),
+  }));
+  const queued = await queuedResponse.json() as { mission: { missionId: string; state: string } };
+  assert.equal(queued.mission.state, "QUEUED");
+
+  const queuedCancellationResponse = await api.fetch(new Request(
+    `http://fleet.test/api/v1/missions/${queued.mission.missionId}/cancel`,
+    { method: "POST" },
+  ));
+  assert.equal(queuedCancellationResponse.status, 200);
+  const queuedCancellation = await queuedCancellationResponse.json() as {
+    cancellation: { mission: { state: string }; receipt: null };
+  };
+  assert.equal(queuedCancellation.cancellation.mission.state, "CANCELLED");
+  assert.equal(queuedCancellation.cancellation.receipt, null);
+
+  const dispatchedResponse = await api.fetch(new Request("http://fleet.test/api/v1/missions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(transportMissionFixture({ externalReference: "CANCEL-DISPATCHED" })),
+  }));
+  const dispatched = await dispatchedResponse.json() as { mission: { missionId: string; state: string } };
+  assert.equal(dispatched.mission.state, "DISPATCHED");
+
+  const cancellationResponse = await api.fetch(new Request(
+    `http://fleet.test/api/v1/missions/${dispatched.mission.missionId}/cancel`,
+    { method: "POST" },
+  ));
+  assert.equal(cancellationResponse.status, 200);
+  const cancellation = await cancellationResponse.json() as {
+    cancellation: { mission: { state: string }; receipt: { status: string } };
+  };
+  assert.equal(cancellation.cancellation.mission.state, "CANCELLED");
+  assert.equal(cancellation.cancellation.receipt.status, "ACCEPTED");
+  await core.stop();
+});

@@ -145,6 +145,19 @@ query it directly:
 curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/events
 ```
 
+The same timeline includes an operator cancellation control for queued,
+dispatched, and executing missions. The equivalent API request is:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/missions/MISSION_ID/cancel
+```
+
+A queued mission is cancelled locally. For a dispatched or executing mission,
+Fleet Core first records `CANCELLING`, asks the robot adapter to cancel the
+accepted command, and keeps its traffic reservations until the robot confirms
+`CANCELLED`. Adapter delivery failures and rejections remain visible in the
+mission timeline, and the same request can be retried safely.
+
 ## Verify the implementation
 
 ```bash

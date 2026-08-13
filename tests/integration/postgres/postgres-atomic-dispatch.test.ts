@@ -187,6 +187,48 @@ test("concurrent recovery workers create one durable safety hold", {
   }
 });
 
+test("PostgreSQL persists cancellation audit events and releases the reserved route", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-CANCEL-${suffix}`;
+  const capability = `cancel-${suffix}`;
+  const clock = new ManualClock(new Date().toISOString());
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  await releaseStalePostgresTestHolds(persistence);
+  await persistence.maps.save(createDefaultPlantTopology());
+  const core = createCore(persistence, `CA-${suffix}`, robotId, capability, clock);
+
+  try {
+    await core.start();
+    const mission = await core.createMission(transportMissionFixture({
+      externalReference: `PG-CANCEL-${suffix}`,
+      requiredCapabilities: [capability],
+    }));
+    await core.dispatchMission(mission.missionId);
+    const cancellation = await core.cancelMission(mission.missionId);
+
+    assert.equal(cancellation.mission.state, "CANCELLED");
+    assert.equal((await core.getMissionRoute(mission.missionId))?.status, "RELEASED");
+    const events = await persistence.database.query<{ event_type: string }>(`
+      SELECT event_type
+      FROM mission_events
+      WHERE mission_id = $1
+        AND event_type IN ('MISSION_CANCELLATION_REQUESTED', 'MISSION_CANCELLED', 'ROUTE_RELEASED')
+      ORDER BY event_id
+    `, [mission.missionId]);
+    assert.deepEqual(events.rows.map((row) => row.event_type), [
+      "MISSION_CANCELLATION_REQUESTED",
+      "MISSION_CANCELLED",
+      "ROUTE_RELEASED",
+    ]);
+  } finally {
+    await core.stop();
+    await persistence.close();
+  }
+});
+
 async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): Promise<void> {
   const stale = await persistence.database.query<{ mission_id: string }>(`
     SELECT mission_id

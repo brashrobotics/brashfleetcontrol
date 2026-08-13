@@ -44,6 +44,10 @@ Keep this README current as implementation is added, and define ownership, valid
 - `DEGRADED`, `OFFLINE`, and mission `RECOVERY_REQUIRED` lifecycle support.
 - Renewable route leases and a non-releasing `SAFETY_HOLD` traffic state.
 
+`005_mission_cancellation.sql` adds:
+
+- Durable audit-event types for cancellation requests, adapter delivery failures, and robot rejections.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

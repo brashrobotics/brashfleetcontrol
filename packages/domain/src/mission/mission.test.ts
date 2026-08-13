@@ -59,6 +59,36 @@ test("a rejected assignment returns a mission to the queue", () => {
   assert.equal(mission.failureReason, "Robot rejected the job.");
 });
 
+test("a queued mission can be cancelled without a robot command", () => {
+  const mission = createMission();
+  const queuedAt = new Date("2026-08-12T10:00:01.000Z");
+  const cancelledAt = new Date("2026-08-12T10:00:02.000Z");
+  mission.queue(queuedAt);
+  mission.cancelQueued(cancelledAt);
+
+  assert.equal(mission.state, "CANCELLED");
+  assert.equal(mission.assignedRobotId, null);
+  assert.equal(mission.commandId, null);
+  assert.deepEqual(mission.updatedAt, cancelledAt);
+});
+
+test("an executing mission requires cancellation confirmation from its command", () => {
+  const mission = createMission();
+  const at = new Date("2026-08-12T10:00:01.000Z");
+  mission.queue(at);
+  mission.assign("BR-01", at);
+  mission.markDispatched("COMMAND-0001", at);
+  mission.markExecuting("COMMAND-0001", at);
+  mission.requestCancellation(at);
+
+  assert.equal(mission.state, "CANCELLING");
+  assert.throws(() => mission.cancel("COMMAND-OTHER", at), (error: unknown) =>
+    error instanceof DomainError && error.code === "MISSION_COMMAND_MISMATCH",
+  );
+  mission.cancel("COMMAND-0001", at);
+  assert.equal(mission.state, "CANCELLED");
+});
+
 test("mission can pause for recovery and resume its previous state", () => {
   const mission = createMission();
   mission.queue(new Date("2026-08-12T10:00:01.000Z"));

@@ -27,12 +27,13 @@ What works today:
 - Heartbeat-based `ONLINE`, `DEGRADED`, and `OFFLINE` robot liveness
 - Renewable route leases and conservative traffic safety holds
 - Safe mission recovery or reassignment after explicit robot-state confirmation
+- Operator-initiated mission cancellation with robot confirmation and safe traffic release
 
 What is not production-ready yet:
 
 - Motor, safety PLC, and sensor integrations
 - Real localization and navigation
-- Priority preemption, route cancellation recovery, and dynamic obstacle replanning
+- Priority preemption, automatic cancellation retry, and dynamic obstacle replanning
 - Authentication and role-based authorization
 - Device certificates, signed OTA updates, and rollback
 - Production observability and black-box recording
@@ -61,6 +62,7 @@ The repository now also contains the first vendor-independent Fleet Core impleme
 - Map-aware routing and conflict-free traffic time slots
 - Idempotent command handling
 - Mission execution state reconciliation
+- Queued and in-flight mission cancellation with explicit adapter confirmation
 - Offline-robot recovery without duplicate physical mission execution
 - Versioned `/api/v1` HTTP endpoints
 

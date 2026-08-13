@@ -149,7 +149,7 @@
 
     <dialog id="timeline-dialog" class="mission-dialog timeline-dialog">
       <div class="timeline-shell">
-        <div class="dialog-head"><div><span>MISSION AUDIT TRAIL</span><h2 id="timeline-title">Mission timeline</h2></div><button type="button" id="close-timeline" aria-label="Close">×</button></div>
+        <div class="dialog-head"><div><span>MISSION AUDIT TRAIL</span><h2 id="timeline-title">Mission timeline</h2></div><div class="timeline-actions"><button type="button" class="danger-button timeline-cancel" id="cancel-mission-button" hidden>Cancel mission</button><button type="button" id="close-timeline" aria-label="Close">×</button></div></div>
         <p class="dialog-copy">Durable state transitions and robot command delivery attempts, ordered by observation time.</p>
         <div id="timeline-list" class="timeline-list" aria-live="polite"></div>
       </div>

@@ -214,6 +214,12 @@ export class Mission {
     this.transition("CANCELLING", at);
   }
 
+  cancelQueued(at: Date): void {
+    this.assertState("QUEUED", "cancel before assignment");
+    this.currentFailureReason = null;
+    this.transition("CANCELLED", at);
+  }
+
   cancel(commandId: string, at: Date): void {
     this.assertState("CANCELLING", "confirm cancellation");
     if (this.currentCommandId) this.assertCommand(commandId);
@@ -221,7 +227,12 @@ export class Mission {
   }
 
   complete(commandId: string, at: Date): void {
-    this.assertState("EXECUTING", "complete");
+    if (this.currentState !== "EXECUTING" && this.currentState !== "CANCELLING") {
+      throw new DomainError(
+        "MISSION_TRANSITION_INVALID",
+        `Cannot complete a mission in ${this.currentState}; expected EXECUTING or CANCELLING.`,
+      );
+    }
     this.assertCommand(commandId);
     this.transition("COMPLETED", at);
   }
