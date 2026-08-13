@@ -60,6 +60,7 @@ PostgreSQL persists:
 - Versioned factory map topologies.
 - Route plans and edge/node reservation time windows.
 - Robot heartbeat timestamps, recovery state, and renewable route leases.
+- Priority-aged dispatch queue attempts, retry times, errors, and worker leases.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
@@ -81,6 +82,13 @@ the mission becomes `RECOVERY_REQUIRED`, command retry is suspended, and its
 route resources become a visible `SAFETY_HOLD`. The hold is not released merely
 because a timer expired: the robot must reconnect and report whether the old
 command is still active. Only a confirmed clear state permits reassignment.
+
+Queued missions are evaluated continuously by the mission-dispatch worker.
+Selection uses the mission priority plus one aging point per configured interval,
+up to priority 100, so low-priority work cannot starve indefinitely. Failed
+assignment attempts use bounded exponential backoff. PostgreSQL workers claim
+due missions with expiring leases and `SKIP LOCKED`, allowing multiple Fleet
+Core instances to run without dispatching one queued mission twice.
 
 ## Create and automatically dispatch a transport mission
 
@@ -132,11 +140,14 @@ curl http://127.0.0.1:4273/api/v1/maps/plant-a%401/topology
 curl 'http://127.0.0.1:4273/api/v1/traffic/schedule?mapId=plant-a%401'
 curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/route
 curl http://127.0.0.1:4273/api/v1/recovery/status
+curl http://127.0.0.1:4273/api/v1/dispatch/queue
 ```
 
 The operator dashboard renders the same topology and colors active/upcoming
 reserved lanes. Its traffic card shows route timing and wait duration.
 Safety holds are red; robot details show heartbeat age and connection state.
+The mission table shows each queued mission's effective priority and next
+automatic dispatch attempt.
 
 Select any mission row in the dashboard to open its durable event timeline, or
 query it directly:

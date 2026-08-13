@@ -3,6 +3,7 @@ import {
   type AssignmentDecision,
   type CommandReceipt,
   type CreateMissionRequest,
+  type DispatchQueueView,
   type DispatchResult,
   type FleetRecoveryStatusView,
   type FleetSnapshot,
@@ -39,6 +40,8 @@ import type {
   AssignmentDecisionRepository,
   CommandRepository,
   MissionEventRepository,
+  MissionQueueEntry,
+  MissionQueueRepository,
   MissionRepository,
   MapTopologyRepository,
   PendingCommand,
@@ -50,6 +53,7 @@ import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
 
 export interface FleetCoreDependencies {
   missions: MissionRepository;
+  missionQueue: MissionQueueRepository;
   robots: RobotRepository;
   commands: CommandRepository;
   decisions: AssignmentDecisionRepository;
@@ -69,6 +73,10 @@ export interface FleetCoreDependencies {
 export interface FleetRecoveryOptions {
   trafficLeaseMs?: number;
   renewLeaseWithinMs?: number;
+  dispatchQueueAgingIntervalMs?: number;
+  dispatchQueueLeaseMs?: number;
+  dispatchRetryBaseMs?: number;
+  dispatchRetryMaxMs?: number;
 }
 
 interface AssignmentPreparation {
@@ -92,6 +100,10 @@ export class FleetCore {
   private readonly dependencies: FleetCoreDependencies;
   private readonly trafficLeaseMs: number;
   private readonly renewLeaseWithinMs: number;
+  private readonly dispatchQueueAgingIntervalMs: number;
+  private readonly dispatchQueueLeaseMs: number;
+  private readonly dispatchRetryBaseMs: number;
+  private readonly dispatchRetryMaxMs: number;
   private readonly managedRobotIds = new Set<string>();
   private unsubscribe: Unsubscribe | null = null;
   private started = false;
@@ -100,6 +112,10 @@ export class FleetCore {
     this.dependencies = dependencies;
     this.trafficLeaseMs = recoveryOptions.trafficLeaseMs ?? 45_000;
     this.renewLeaseWithinMs = recoveryOptions.renewLeaseWithinMs ?? 20_000;
+    this.dispatchQueueAgingIntervalMs = recoveryOptions.dispatchQueueAgingIntervalMs ?? 60_000;
+    this.dispatchQueueLeaseMs = recoveryOptions.dispatchQueueLeaseMs ?? 30_000;
+    this.dispatchRetryBaseMs = recoveryOptions.dispatchRetryBaseMs ?? 1_000;
+    this.dispatchRetryMaxMs = recoveryOptions.dispatchRetryMaxMs ?? 60_000;
   }
 
   async start(): Promise<void> {
@@ -200,6 +216,7 @@ export class FleetCore {
       });
       mission.queue(now);
       await this.dependencies.missions.save(mission);
+      await this.dependencies.missionQueue.enqueue(mission.missionId, mission.priority, now);
       await this.appendMissionEvent(mission, "MISSION_QUEUED", "Mission accepted and queued.", now);
       return missionToView(mission);
     });
@@ -279,6 +296,7 @@ export class FleetCore {
       mission.assign(robot.robotId, now);
       await this.dependencies.robots.save(robot);
       await this.dependencies.missions.save(mission);
+      await this.dependencies.missionQueue.complete(mission.missionId, "DISPATCHED", now);
       await this.dependencies.traffic.save(route);
       await this.appendMissionEvent(
         mission,
@@ -342,6 +360,7 @@ export class FleetCore {
       if (mission.state === "QUEUED") {
         mission.cancelQueued(now);
         await this.dependencies.missions.save(mission);
+        await this.dependencies.missionQueue.complete(mission.missionId, "CANCELLED", now);
         await this.appendMissionEvent(
           mission,
           "MISSION_CANCELLED",
@@ -448,6 +467,27 @@ export class FleetCore {
 
   async getMission(missionId: string): Promise<MissionView> {
     return missionToView(await this.requireMission(missionId));
+  }
+
+  async getDispatchQueue(): Promise<DispatchQueueView> {
+    const evaluatedAt = this.dependencies.clock.now();
+    const entries = await this.dependencies.missionQueue.listPending(
+      evaluatedAt,
+      this.dispatchQueueAgingIntervalMs,
+    );
+    const leased = entries.filter((entry) => entry.leaseExpiresAt && entry.leaseExpiresAt.getTime() > evaluatedAt.getTime());
+    const due = entries.filter((entry) => entry.nextAttemptAt.getTime() <= evaluatedAt.getTime()
+      && (!entry.leaseExpiresAt || entry.leaseExpiresAt.getTime() <= evaluatedAt.getTime()));
+    return {
+      evaluatedAt: evaluatedAt.toISOString(),
+      pendingMissions: entries.length,
+      dueMissions: due.length,
+      leasedMissions: leased.length,
+      nextAttemptAt: entries.length > 0
+        ? new Date(Math.min(...entries.map((entry) => entry.nextAttemptAt.getTime()))).toISOString()
+        : null,
+      entries: entries.map((entry) => this.missionQueueEntryToView(entry)),
+    };
   }
 
   async getMissionEvents(missionId: string): Promise<MissionEventView[]> {
@@ -606,6 +646,46 @@ export class FleetCore {
     return pending.length;
   }
 
+  async processMissionQueue(limit = 25): Promise<number> {
+    this.assertStarted();
+    const claimedAt = this.dependencies.clock.now();
+    const entries = await this.dependencies.missionQueue.claimDue(limit, {
+      workerId: this.dependencies.instanceId,
+      claimedAt,
+      leaseDurationMs: this.dispatchQueueLeaseMs,
+      agingIntervalMs: this.dispatchQueueAgingIntervalMs,
+    });
+
+    for (const entry of entries) {
+      try {
+        const result = await this.dispatchMission(entry.missionId);
+        if (!result.decision.selectedRobotId) {
+          await this.deferMissionQueueEntry(
+            entry,
+            result.decision.reasons.join(" ") || "No eligible robot is currently available.",
+          );
+        }
+      } catch (error) {
+        if (error instanceof DomainError && error.code === "MISSION_NOT_QUEUED") {
+          const mission = await this.dependencies.missions.getById(entry.missionId);
+          if (mission && mission.state !== "QUEUED") {
+            await this.dependencies.missionQueue.complete(
+              entry.missionId,
+              mission.state === "CANCELLED" ? "CANCELLED" : "DISPATCHED",
+              this.dependencies.clock.now(),
+            );
+            continue;
+          }
+        }
+        await this.deferMissionQueueEntry(
+          entry,
+          error instanceof Error ? error.message : "Automatic mission dispatch failed.",
+        );
+      }
+    }
+    return entries.length;
+  }
+
   async getSnapshot(): Promise<FleetSnapshot> {
     const [robots, missions] = await Promise.all([
       this.dependencies.robots.list(),
@@ -660,6 +740,7 @@ export class FleetCore {
               const previousRobotId = mission.assignedRobotId;
               const previousCommandId = mission.commandId;
               mission.requeueAfterRecovery("Robot confirmed that the previous command is no longer active.", receivedAt);
+              await this.dependencies.missionQueue.enqueue(mission.missionId, mission.priority, receivedAt);
               await this.dependencies.commands.cancelPendingByMission(
                 mission.missionId,
                 receivedAt,
@@ -860,6 +941,7 @@ export class FleetCore {
         }
       } else if (currentMission.state === "ASSIGNED") {
         currentMission.releaseRejectedAssignment(receipt.reason ?? "Robot rejected the mission.", now);
+        await this.dependencies.missionQueue.enqueue(currentMission.missionId, currentMission.priority, now);
         robot.release(command.missionId, now);
         await this.dependencies.robots.save(robot);
         await this.appendMissionEvent(
@@ -891,6 +973,38 @@ export class FleetCore {
 
   private retryDelayMs(attempt: number): number {
     return Math.min(1_000 * (2 ** Math.max(0, attempt - 1)), 60_000);
+  }
+
+  private dispatchRetryDelayMs(attempt: number): number {
+    return Math.min(
+      this.dispatchRetryBaseMs * (2 ** Math.max(0, attempt - 1)),
+      this.dispatchRetryMaxMs,
+    );
+  }
+
+  private async deferMissionQueueEntry(entry: MissionQueueEntry, reason: string): Promise<void> {
+    const attemptedAt = this.dependencies.clock.now();
+    await this.dependencies.missionQueue.defer(
+      entry.missionId,
+      attemptedAt,
+      new Date(attemptedAt.getTime() + this.dispatchRetryDelayMs(entry.attemptCount)),
+      reason,
+    );
+  }
+
+  private missionQueueEntryToView(entry: MissionQueueEntry) {
+    return {
+      missionId: entry.missionId,
+      basePriority: entry.basePriority,
+      effectivePriority: entry.effectivePriority,
+      attemptCount: entry.attemptCount,
+      enqueuedAt: entry.enqueuedAt.toISOString(),
+      nextAttemptAt: entry.nextAttemptAt.toISOString(),
+      lastAttemptAt: entry.lastAttemptAt?.toISOString() ?? null,
+      lastError: entry.lastError,
+      leaseOwner: entry.leaseOwner,
+      leaseExpiresAt: entry.leaseExpiresAt?.toISOString() ?? null,
+    };
   }
 
   private async appendMissionEvent(

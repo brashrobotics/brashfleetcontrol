@@ -73,6 +73,52 @@ test("concurrent dispatchers cannot reserve the same PostgreSQL robot", {
   }
 });
 
+test("concurrent PostgreSQL queue workers claim a queued mission once", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-QUEUE-${suffix}`;
+  const capability = `queue-${suffix}`;
+  const clock = new ManualClock(new Date().toISOString());
+  const firstPersistence = createPersistence(databaseUrl!);
+  const secondPersistence = createPersistence(databaseUrl!);
+  await firstPersistence.migrate();
+  await releaseStalePostgresTestHolds(firstPersistence);
+  await firstPersistence.maps.save(createDefaultPlantTopology());
+  const first = createCore(firstPersistence, `QA-${suffix}`, robotId, capability, clock);
+  const second = createCore(secondPersistence, `QB-${suffix}`, robotId, capability, clock);
+
+  try {
+    await first.start();
+    await second.start();
+    const mission = await first.createMission(transportMissionFixture({
+      externalReference: `PG-QUEUE-${suffix}`,
+      requiredCapabilities: [capability],
+      autoDispatch: false,
+    }));
+
+    const processed = await Promise.all([
+      first.processMissionQueue(),
+      second.processMissionQueue(),
+    ]);
+    assert.equal(processed[0] + processed[1], 1);
+    assert.equal((await first.getMission(mission.missionId)).state, "DISPATCHED");
+    assert.equal((await first.getDispatchQueue()).pendingMissions, 0);
+
+    const assignments = await firstPersistence.database.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM mission_events
+      WHERE mission_id = $1 AND event_type = 'MISSION_ASSIGNED'
+    `, [mission.missionId]);
+    assert.equal(assignments.rows[0].count, "1");
+  } finally {
+    await first.stop();
+    await second.stop();
+    await firstPersistence.close();
+    await secondPersistence.close();
+  }
+});
+
 test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap", {
   skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
 }, async () => {
@@ -238,6 +284,15 @@ async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): 
   for (const row of stale.rows) {
     await persistence.traffic.releaseByMission(row.mission_id, new Date());
   }
+  await persistence.database.query(`
+    UPDATE mission_dispatch_queue AS queue
+    SET status = 'CANCELLED', completed_at = now(), updated_at = now(),
+        lease_owner = NULL, lease_expires_at = NULL
+    FROM missions AS mission
+    WHERE queue.mission_id = mission.mission_id
+      AND queue.status = 'PENDING'
+      AND mission.external_reference LIKE 'PG-%'
+  `);
 }
 
 function createPersistence(connectionString: string): PostgresPersistence {
@@ -257,6 +312,7 @@ function createCore(
 ): FleetCore {
   return new FleetCore({
     missions: persistence.missions,
+    missionQueue: persistence.missionQueue,
     robots: persistence.robots,
     commands: persistence.commands,
     decisions: persistence.decisions,
@@ -285,6 +341,7 @@ function createMultiRobotCore(
 ): FleetCore {
   return new FleetCore({
     missions: persistence.missions,
+    missionQueue: persistence.missionQueue,
     robots: persistence.robots,
     commands: persistence.commands,
     decisions: persistence.decisions,

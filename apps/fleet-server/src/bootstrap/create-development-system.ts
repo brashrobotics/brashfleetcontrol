@@ -12,6 +12,7 @@ import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
+  InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
   InMemoryMapTopologyRepository,
   InMemoryRobotRepository,
@@ -71,6 +72,7 @@ export function createDevelopmentSystem() {
 
   const core = new FleetCore({
     missions: new InMemoryMissionRepository(),
+    missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),

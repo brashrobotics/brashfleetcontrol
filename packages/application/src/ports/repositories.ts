@@ -26,6 +26,36 @@ export interface MissionRepository {
   save(mission: Mission): Promise<void>;
 }
 
+export type MissionQueueOutcome = "DISPATCHED" | "CANCELLED";
+
+export interface MissionQueueEntry {
+  missionId: string;
+  basePriority: number;
+  effectivePriority: number;
+  attemptCount: number;
+  enqueuedAt: Date;
+  nextAttemptAt: Date;
+  lastAttemptAt: Date | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
+}
+
+export interface MissionQueueClaimOptions {
+  workerId: string;
+  claimedAt: Date;
+  leaseDurationMs: number;
+  agingIntervalMs: number;
+}
+
+export interface MissionQueueRepository {
+  enqueue(missionId: string, priority: number, enqueuedAt: Date): Promise<void>;
+  claimDue(limit: number, options: MissionQueueClaimOptions): Promise<MissionQueueEntry[]>;
+  listPending(now: Date, agingIntervalMs: number): Promise<MissionQueueEntry[]>;
+  defer(missionId: string, attemptedAt: Date, nextAttemptAt: Date, reason: string): Promise<void>;
+  complete(missionId: string, outcome: MissionQueueOutcome, completedAt: Date): Promise<void>;
+}
+
 export interface RobotRepository {
   getById(robotId: string, options?: RepositoryReadOptions): Promise<Robot | null>;
   list(options?: RepositoryReadOptions): Promise<Robot[]>;

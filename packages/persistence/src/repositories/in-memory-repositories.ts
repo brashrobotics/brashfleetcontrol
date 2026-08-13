@@ -3,6 +3,10 @@ import type {
   CommandClaimOptions,
   CommandRepository,
   MissionEventRepository,
+  MissionQueueClaimOptions,
+  MissionQueueEntry,
+  MissionQueueOutcome,
+  MissionQueueRepository,
   MissionRepository,
   MapTopologyRepository,
   NewMissionEvent,
@@ -48,6 +52,102 @@ export class InMemoryMissionRepository implements MissionRepository {
 
   async save(mission: Mission): Promise<void> {
     this.missions.set(mission.missionId, mission);
+  }
+}
+
+interface StoredMissionQueueEntry {
+  missionId: string;
+  basePriority: number;
+  attemptCount: number;
+  enqueuedAt: Date;
+  nextAttemptAt: Date;
+  lastAttemptAt: Date | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
+}
+
+export class InMemoryMissionQueueRepository implements MissionQueueRepository {
+  private readonly entries = new Map<string, StoredMissionQueueEntry>();
+
+  async enqueue(missionId: string, priority: number, enqueuedAt: Date): Promise<void> {
+    const existing = this.entries.get(missionId);
+    if (existing) {
+      existing.basePriority = priority;
+      existing.nextAttemptAt = new Date(Math.min(existing.nextAttemptAt.getTime(), enqueuedAt.getTime()));
+      return;
+    }
+    this.entries.set(missionId, {
+      missionId,
+      basePriority: priority,
+      attemptCount: 0,
+      enqueuedAt: new Date(enqueuedAt),
+      nextAttemptAt: new Date(enqueuedAt),
+      lastAttemptAt: null,
+      lastError: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+  }
+
+  async claimDue(limit: number, options: MissionQueueClaimOptions): Promise<MissionQueueEntry[]> {
+    return [...this.entries.values()]
+      .filter((entry) => entry.nextAttemptAt.getTime() <= options.claimedAt.getTime()
+        && (!entry.leaseExpiresAt || entry.leaseExpiresAt.getTime() <= options.claimedAt.getTime()))
+      .sort((left, right) => this.effectivePriority(right, options.claimedAt, options.agingIntervalMs)
+        - this.effectivePriority(left, options.claimedAt, options.agingIntervalMs)
+        || left.enqueuedAt.getTime() - right.enqueuedAt.getTime()
+        || left.missionId.localeCompare(right.missionId))
+      .slice(0, limit)
+      .map((entry) => {
+        entry.attemptCount += 1;
+        entry.lastAttemptAt = new Date(options.claimedAt);
+        entry.leaseOwner = options.workerId;
+        entry.leaseExpiresAt = new Date(options.claimedAt.getTime() + options.leaseDurationMs);
+        return this.toView(entry, options.claimedAt, options.agingIntervalMs);
+      });
+  }
+
+  async listPending(now: Date, agingIntervalMs: number): Promise<MissionQueueEntry[]> {
+    return [...this.entries.values()]
+      .map((entry) => this.toView(entry, now, agingIntervalMs))
+      .sort((left, right) => right.effectivePriority - left.effectivePriority
+        || left.enqueuedAt.getTime() - right.enqueuedAt.getTime()
+        || left.missionId.localeCompare(right.missionId));
+  }
+
+  async defer(missionId: string, attemptedAt: Date, nextAttemptAt: Date, reason: string): Promise<void> {
+    const entry = this.entries.get(missionId);
+    if (!entry) return;
+    entry.lastAttemptAt = new Date(attemptedAt);
+    entry.nextAttemptAt = new Date(nextAttemptAt);
+    entry.lastError = reason;
+    entry.leaseOwner = null;
+    entry.leaseExpiresAt = null;
+  }
+
+  async complete(missionId: string, _outcome: MissionQueueOutcome, _completedAt: Date): Promise<void> {
+    this.entries.delete(missionId);
+  }
+
+  private effectivePriority(entry: StoredMissionQueueEntry, now: Date, agingIntervalMs: number): number {
+    const ageMs = Math.max(0, now.getTime() - entry.enqueuedAt.getTime());
+    return Math.min(100, entry.basePriority + Math.floor(ageMs / agingIntervalMs));
+  }
+
+  private toView(entry: StoredMissionQueueEntry, now: Date, agingIntervalMs: number): MissionQueueEntry {
+    return {
+      missionId: entry.missionId,
+      basePriority: entry.basePriority,
+      effectivePriority: this.effectivePriority(entry, now, agingIntervalMs),
+      attemptCount: entry.attemptCount,
+      enqueuedAt: new Date(entry.enqueuedAt),
+      nextAttemptAt: new Date(entry.nextAttemptAt),
+      lastAttemptAt: entry.lastAttemptAt ? new Date(entry.lastAttemptAt) : null,
+      lastError: entry.lastError,
+      leaseOwner: entry.leaseOwner,
+      leaseExpiresAt: entry.leaseExpiresAt ? new Date(entry.leaseExpiresAt) : null,
+    };
   }
 }
 

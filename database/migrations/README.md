@@ -48,6 +48,12 @@ Keep this README current as implementation is added, and define ownership, valid
 
 - Durable audit-event types for cancellation requests, adapter delivery failures, and robot rejections.
 
+`006_priority_dispatch_queue.sql` adds:
+
+- A durable mission dispatch queue with retry scheduling and expiring worker leases.
+- Priority-aging inputs that prevent low-priority missions from waiting forever.
+- Backfill of missions that were already queued before the scheduler upgrade.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

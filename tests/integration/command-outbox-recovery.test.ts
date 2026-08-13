@@ -9,6 +9,7 @@ import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
+  InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
   InMemoryMapTopologyRepository,
   InMemoryRobotRepository,
@@ -52,6 +53,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
   ], { now: () => clock.now() }));
   const dependencies = {
     missions: new InMemoryMissionRepository(),
+    missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
@@ -93,6 +95,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
   const clock = new ManualClock();
   const dependencies = {
     missions: new InMemoryMissionRepository(),
+    missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
@@ -138,6 +141,7 @@ test("startup reconciliation does not overwrite a durable reservation with stale
   const clock = new ManualClock();
   const shared = {
     missions: new InMemoryMissionRepository(),
+    missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),

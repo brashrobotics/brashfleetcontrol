@@ -20,6 +20,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
     const adapter = createDevelopmentAdapter();
     const core = new FleetCore({
       missions: persistence.missions,
+      missionQueue: persistence.missionQueue,
       robots: persistence.robots,
       commands: persistence.commands,
       decisions: persistence.decisions,

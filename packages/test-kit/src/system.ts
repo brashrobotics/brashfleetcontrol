@@ -1,4 +1,4 @@
-import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology } from "@brash/application";
+import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology, type FleetRecoveryOptions } from "@brash/application";
 import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import type { SimulatorRobotDefinition } from "@brash/simulator-adapter";
@@ -6,6 +6,7 @@ import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
+  InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
   InMemoryMapTopologyRepository,
   InMemoryRobotRepository,
@@ -18,6 +19,7 @@ import { robotFixture } from "./fixtures.js";
 export function createTestFleetSystem(options: {
   autoAdvance?: boolean;
   robots?: SimulatorRobotDefinition[];
+  coreOptions?: FleetRecoveryOptions;
 } = {}) {
   const clock = new ManualClock();
   const ids = new SequentialIdGenerator();
@@ -45,6 +47,7 @@ export function createTestFleetSystem(options: {
     autoAdvance: options.autoAdvance ?? false,
   });
   const missions = new InMemoryMissionRepository();
+  const missionQueue = new InMemoryMissionQueueRepository();
   const robots = new InMemoryRobotRepository();
   const commands = new InMemoryCommandRepository();
   const decisions = new InMemoryAssignmentDecisionRepository();
@@ -54,6 +57,7 @@ export function createTestFleetSystem(options: {
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     missions,
+    missionQueue,
     robots,
     commands,
     decisions,
@@ -68,7 +72,7 @@ export function createTestFleetSystem(options: {
     trafficScheduler: new TrafficScheduler(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "test-fleet-core",
-  });
+  }, options.coreOptions);
 
-  return { core, adapter, clock, ids, missions, robots, commands, decisions, events, maps, traffic, transactions };
+  return { core, adapter, clock, ids, missions, missionQueue, robots, commands, decisions, events, maps, traffic, transactions };
 }

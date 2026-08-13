@@ -35,6 +35,7 @@ const fallbackState = {
   topology: structuredClone(fallbackTopology),
   traffic: { mapId: "plant-a@1", plans: [], reservations: [], updatedAt: new Date().toISOString() },
   recovery: { degradedRobots: 0, offlineRobots: 0, recoveryRequiredMissions: 0, safetyHolds: 0, nextLeaseExpiryAt: null },
+  queue: { pendingMissions: 0, dueMissions: 0, leasedMissions: 0, nextAttemptAt: null, entries: [] },
 };
 
 const destinationStations = {
@@ -94,7 +95,7 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic, recovery) {
+function adaptCoreSnapshot(snapshot, topology, traffic, recovery, queue) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -135,6 +136,7 @@ function adaptCoreSnapshot(snapshot, topology, traffic, recovery) {
     topology,
     traffic,
     recovery,
+    queue,
   };
 }
 
@@ -147,6 +149,7 @@ function normalizePreviewSnapshot(snapshot) {
     topology: snapshot.topology ?? structuredClone(fallbackTopology),
     traffic: snapshot.traffic ?? traffic,
     recovery: snapshot.recovery ?? fallbackState.recovery,
+    queue: snapshot.queue ?? fallbackState.queue,
   };
 }
 
@@ -355,6 +358,7 @@ function renderRobotDetail() {
 }
 
 function renderMissions() {
+  const queueByMission = new Map((state.queue?.entries ?? []).map((entry) => [entry.missionId, entry]));
   $("#mission-table").innerHTML = state.missions.map((mission) => `
     <tr class="mission-row" data-mission-id="${escapeHtml(mission.id)}" tabindex="0" aria-label="Open timeline for mission ${escapeHtml(mission.id)}">
       <td>${escapeHtml(mission.id)}</td>
@@ -363,9 +367,13 @@ function renderMissions() {
       <td>${escapeHtml(mission.to)}</td>
       <td><span class="status-badge ${mission.status}">${escapeHtml(mission.state ?? mission.status)}</span></td>
       <td><span class="table-progress ${mission.status}"><i style="width:${Number(mission.progress)}%"></i></span>${Math.round(mission.progress)}%</td>
-      <td><span class="traffic-slot ${mission.route?.totalWaitSeconds > 0 ? "delayed" : ""}">${mission.route ? escapeHtml(formatShortTime(mission.route.scheduledStartAt)) : "—"}</span></td>
+      <td><span class="traffic-slot ${mission.route?.totalWaitSeconds > 0 ? "delayed" : ""}">${mission.route ? escapeHtml(formatShortTime(mission.route.scheduledStartAt)) : queueByMission.has(mission.id) ? "P" + queueByMission.get(mission.id).effectivePriority + " · " + escapeHtml(formatShortTime(queueByMission.get(mission.id).nextAttemptAt)) : "—"}</span></td>
       <td>${escapeHtml(mission.createdAt)}</td>
     </tr>`).join("") || '<tr><td colspan="8" style="color:var(--muted)">No missions yet. Create the first transport mission.</td></tr>';
+  const queue = state.queue ?? fallbackState.queue;
+  $("#queue-summary").textContent = queue.pendingMissions
+    ? `${queue.pendingMissions} queued · ${queue.dueMissions} ready for dispatch`
+    : "Automatic priority queue is clear";
 }
 
 function formatEventType(type) {
@@ -450,14 +458,15 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse, recoveryResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, recoveryResponse, queueResponse] = await Promise.all([
     fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
     fetch("/api/v1/recovery/status", { cache: "no-store" }),
+    fetch("/api/v1/dispatch/queue", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok || !recoveryResponse.ok) throw new Error("Fleet coordination state unavailable");
-  const [{ topology }, { schedule }, { recovery }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), recoveryResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule, recovery);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !recoveryResponse.ok || !queueResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { recovery }, { queue }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), recoveryResponse.json(), queueResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, recovery, queue);
   renderAll();
 }
 

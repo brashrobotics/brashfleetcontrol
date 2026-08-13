@@ -4,6 +4,10 @@ import type {
   CommandRepository,
   MapTopologyRepository,
   MissionEventRepository,
+  MissionQueueClaimOptions,
+  MissionQueueEntry,
+  MissionQueueOutcome,
+  MissionQueueRepository,
   MissionRepository,
   NewMissionEvent,
   PendingCommand,
@@ -90,6 +94,19 @@ interface MissionEventRow {
   message: string;
   event_data: Record<string, unknown>;
   occurred_at: Date;
+}
+
+interface MissionQueueRow {
+  mission_id: string;
+  base_priority: number;
+  effective_priority: number;
+  attempt_count: number;
+  enqueued_at: Date;
+  next_attempt_at: Date;
+  last_attempt_at: Date | null;
+  last_error: string | null;
+  lease_owner: string | null;
+  lease_expires_at: Date | null;
 }
 
 interface MapTopologyRow {
@@ -229,6 +246,139 @@ export class PostgresMissionRepository implements MissionRepository {
       snapshot.recoveryPreviousState,
       snapshot.recoveryStartedAt,
     ]);
+  }
+}
+
+export class PostgresMissionQueueRepository implements MissionQueueRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async enqueue(missionId: string, _priority: number, enqueuedAt: Date): Promise<void> {
+    await this.database.query(`
+      INSERT INTO mission_dispatch_queue (
+        mission_id, status, enqueued_at, next_attempt_at, created_at, updated_at
+      ) VALUES ($1, 'PENDING', $2, $2, $2, $2)
+      ON CONFLICT (mission_id) DO UPDATE SET
+        status = 'PENDING',
+        enqueued_at = CASE
+          WHEN mission_dispatch_queue.status = 'PENDING'
+            THEN LEAST(mission_dispatch_queue.enqueued_at, EXCLUDED.enqueued_at)
+          ELSE EXCLUDED.enqueued_at
+        END,
+        next_attempt_at = CASE
+          WHEN mission_dispatch_queue.status = 'PENDING'
+            THEN LEAST(mission_dispatch_queue.next_attempt_at, EXCLUDED.next_attempt_at)
+          ELSE EXCLUDED.next_attempt_at
+        END,
+        attempt_count = CASE
+          WHEN mission_dispatch_queue.status = 'PENDING' THEN mission_dispatch_queue.attempt_count
+          ELSE 0
+        END,
+        last_attempt_at = CASE
+          WHEN mission_dispatch_queue.status = 'PENDING' THEN mission_dispatch_queue.last_attempt_at
+          ELSE NULL
+        END,
+        last_error = CASE
+          WHEN mission_dispatch_queue.status = 'PENDING' THEN mission_dispatch_queue.last_error
+          ELSE NULL
+        END,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        completed_at = NULL,
+        updated_at = EXCLUDED.updated_at
+    `, [missionId, enqueuedAt]);
+  }
+
+  async claimDue(limit: number, options: MissionQueueClaimOptions): Promise<MissionQueueEntry[]> {
+    const result = await this.database.query<MissionQueueRow>(`
+      WITH claimable AS (
+        SELECT queue.mission_id,
+               mission.priority AS base_priority,
+               LEAST(100, mission.priority + GREATEST(0, floor(
+                 extract(epoch FROM ($1::timestamptz - queue.enqueued_at)) * 1000 / $2
+               ))::integer) AS effective_priority
+        FROM mission_dispatch_queue AS queue
+        JOIN missions AS mission ON mission.mission_id = queue.mission_id
+        WHERE queue.status = 'PENDING'
+          AND mission.state = 'QUEUED'
+          AND queue.next_attempt_at <= $1
+          AND (queue.lease_expires_at IS NULL OR queue.lease_expires_at <= $1)
+        ORDER BY effective_priority DESC, queue.enqueued_at, queue.mission_id
+        FOR UPDATE OF queue SKIP LOCKED
+        LIMIT $3
+      )
+      UPDATE mission_dispatch_queue AS queue
+      SET attempt_count = queue.attempt_count + 1,
+          last_attempt_at = $1,
+          lease_owner = $4,
+          lease_expires_at = $5,
+          updated_at = $1
+      FROM claimable
+      WHERE queue.mission_id = claimable.mission_id
+      RETURNING queue.mission_id,
+                claimable.base_priority,
+                claimable.effective_priority,
+                queue.attempt_count,
+                queue.enqueued_at,
+                queue.next_attempt_at,
+                queue.last_attempt_at,
+                queue.last_error,
+                queue.lease_owner,
+                queue.lease_expires_at
+    `, [
+      options.claimedAt,
+      options.agingIntervalMs,
+      limit,
+      options.workerId,
+      new Date(options.claimedAt.getTime() + options.leaseDurationMs),
+    ]);
+    return result.rows.map(missionQueueFromRow);
+  }
+
+  async listPending(now: Date, agingIntervalMs: number): Promise<MissionQueueEntry[]> {
+    const result = await this.database.query<MissionQueueRow>(`
+      SELECT queue.mission_id,
+             mission.priority AS base_priority,
+             LEAST(100, mission.priority + GREATEST(0, floor(
+               extract(epoch FROM ($1::timestamptz - queue.enqueued_at)) * 1000 / $2
+             ))::integer) AS effective_priority,
+             queue.attempt_count,
+             queue.enqueued_at,
+             queue.next_attempt_at,
+             queue.last_attempt_at,
+             queue.last_error,
+             queue.lease_owner,
+             queue.lease_expires_at
+      FROM mission_dispatch_queue AS queue
+      JOIN missions AS mission ON mission.mission_id = queue.mission_id
+      WHERE queue.status = 'PENDING' AND mission.state = 'QUEUED'
+      ORDER BY effective_priority DESC, queue.enqueued_at, queue.mission_id
+    `, [now, agingIntervalMs]);
+    return result.rows.map(missionQueueFromRow);
+  }
+
+  async defer(missionId: string, attemptedAt: Date, nextAttemptAt: Date, reason: string): Promise<void> {
+    await this.database.query(`
+      UPDATE mission_dispatch_queue
+      SET last_attempt_at = $2,
+          next_attempt_at = $3,
+          last_error = $4,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          updated_at = $2
+      WHERE mission_id = $1 AND status = 'PENDING'
+    `, [missionId, attemptedAt, nextAttemptAt, reason]);
+  }
+
+  async complete(missionId: string, outcome: MissionQueueOutcome, completedAt: Date): Promise<void> {
+    await this.database.query(`
+      UPDATE mission_dispatch_queue
+      SET status = $2,
+          completed_at = $3,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          updated_at = $3
+      WHERE mission_id = $1 AND status = 'PENDING'
+    `, [missionId, outcome, completedAt]);
   }
 }
 
@@ -728,6 +878,21 @@ function commandFromRow(row: CommandRow): PendingCommand {
     attemptCount: row.attempt_count,
     lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
     lastError: row.last_error,
+  };
+}
+
+function missionQueueFromRow(row: MissionQueueRow): MissionQueueEntry {
+  return {
+    missionId: row.mission_id,
+    basePriority: row.base_priority,
+    effectivePriority: row.effective_priority,
+    attemptCount: row.attempt_count,
+    enqueuedAt: new Date(row.enqueued_at),
+    nextAttemptAt: new Date(row.next_attempt_at),
+    lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
+    lastError: row.last_error,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
   };
 }
 

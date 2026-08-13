@@ -28,6 +28,7 @@ What works today:
 - Renewable route leases and conservative traffic safety holds
 - Safe mission recovery or reassignment after explicit robot-state confirmation
 - Operator-initiated mission cancellation with robot confirmation and safe traffic release
+- Durable priority mission queue with aging, retry backoff, and multi-instance worker leases
 
 What is not production-ready yet:
 
@@ -59,6 +60,7 @@ The repository now also contains the first vendor-independent Fleet Core impleme
 - Deterministic SimulatorAdapter
 - Capability, payload, map, zone, availability, and battery filtering
 - Explainable weighted robot selection
+- Automatic redispatch when a compatible robot becomes available
 - Map-aware routing and conflict-free traffic time slots
 - Idempotent command handling
 - Mission execution state reconciliation

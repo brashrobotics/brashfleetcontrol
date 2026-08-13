@@ -33,6 +33,10 @@ export class FleetApi {
         return json(await this.core.getSnapshot());
       }
 
+      if (request.method === "GET" && url.pathname === "/api/v1/dispatch/queue") {
+        return json({ queue: await this.core.getDispatchQueue() });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/v1/maps") {
         return json({ maps: await this.core.listMapTopologies() });
       }

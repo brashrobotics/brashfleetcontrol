@@ -114,6 +114,29 @@ test("API rejects an invalid mission before it reaches the domain", async () => 
   await core.stop();
 });
 
+test("API exposes the prioritized automatic dispatch queue", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+  const createResponse = await api.fetch(new Request("http://fleet.test/api/v1/missions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(transportMissionFixture({ autoDispatch: false, externalReference: "QUEUE-API" })),
+  }));
+  const created = await createResponse.json() as { mission: { missionId: string } };
+
+  const response = await api.fetch(new Request("http://fleet.test/api/v1/dispatch/queue"));
+  assert.equal(response.status, 200);
+  const payload = await response.json() as {
+    queue: { pendingMissions: number; dueMissions: number; entries: Array<{ missionId: string; effectivePriority: number }> };
+  };
+  assert.equal(payload.queue.pendingMissions, 1);
+  assert.equal(payload.queue.dueMissions, 1);
+  assert.equal(payload.queue.entries[0].missionId, created.mission.missionId);
+  assert.equal(payload.queue.entries[0].effectivePriority, 70);
+  await core.stop();
+});
+
 test("API does not dispatch an external mission reference twice", async () => {
   const { core } = createTestFleetSystem();
   await core.start();

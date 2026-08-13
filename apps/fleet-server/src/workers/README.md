@@ -34,3 +34,8 @@ cycles.
 persists connection transitions, renews traffic leases for healthy robots, and
 moves unreachable active missions into an idempotent safety hold. PostgreSQL
 row and map locks make the operation safe across multiple Fleet Core instances.
+
+`MissionDispatchWorker` evaluates the durable mission queue every second. It
+claims priority-aged work with expiring leases, retries unavailable assignments
+with bounded exponential backoff, and immediately removes successfully assigned
+or cancelled missions from pending work.

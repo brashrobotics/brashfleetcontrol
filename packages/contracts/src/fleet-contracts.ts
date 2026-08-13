@@ -105,6 +105,28 @@ export interface FleetSnapshot {
   missions: MissionView[];
 }
 
+export interface MissionQueueEntryView {
+  missionId: string;
+  basePriority: number;
+  effectivePriority: number;
+  attemptCount: number;
+  enqueuedAt: string;
+  nextAttemptAt: string;
+  lastAttemptAt: string | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+}
+
+export interface DispatchQueueView {
+  evaluatedAt: string;
+  pendingMissions: number;
+  dueMissions: number;
+  leasedMissions: number;
+  nextAttemptAt: string | null;
+  entries: MissionQueueEntryView[];
+}
+
 export type MapNodeKind = "WAYPOINT" | "INTERSECTION" | "STATION" | "HOLDING_POINT";
 
 export interface MapNodeView {

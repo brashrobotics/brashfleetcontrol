@@ -5,6 +5,7 @@ import {
   PostgresAssignmentDecisionRepository,
   PostgresCommandRepository,
   PostgresMapTopologyRepository,
+  PostgresMissionQueueRepository,
   PostgresMissionEventRepository,
   PostgresMissionRepository,
   PostgresRobotRepository,
@@ -15,6 +16,7 @@ import { PostgresTransactionManager } from "./postgres-transaction-manager.js";
 export class PostgresPersistence {
   readonly database: PostgresDatabase;
   readonly missions: PostgresMissionRepository;
+  readonly missionQueue: PostgresMissionQueueRepository;
   readonly robots: PostgresRobotRepository;
   readonly commands: PostgresCommandRepository;
   readonly decisions: PostgresAssignmentDecisionRepository;
@@ -28,6 +30,7 @@ export class PostgresPersistence {
     this.startupTimeoutMs = config.startupTimeoutMs;
     this.database = new PostgresDatabase(config);
     this.missions = new PostgresMissionRepository(this.database);
+    this.missionQueue = new PostgresMissionQueueRepository(this.database);
     this.robots = new PostgresRobotRepository(this.database);
     this.commands = new PostgresCommandRepository(this.database);
     this.decisions = new PostgresAssignmentDecisionRepository(this.database);

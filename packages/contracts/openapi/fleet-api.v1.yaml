@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.5.0
-  description: Vendor-independent mission, traffic reservation, robot liveness, recovery, and operator control API.
+  version: 0.6.0
+  description: Vendor-independent mission queue, traffic reservation, robot liveness, recovery, and operator control API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -32,6 +32,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FleetSnapshot"
+  /api/v1/dispatch/queue:
+    get:
+      operationId: getDispatchQueue
+      responses:
+        "200":
+          description: Priority-aged missions awaiting automatic dispatch
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queue]
+                properties:
+                  queue: { $ref: "#/components/schemas/DispatchQueue" }
   /api/v1/maps:
     get:
       operationId: listMapTopologies
@@ -548,6 +561,34 @@ components:
         missions:
           type: array
           items: { $ref: "#/components/schemas/Mission" }
+    MissionQueueEntry:
+      type: object
+      additionalProperties: false
+      required: [missionId, basePriority, effectivePriority, attemptCount, enqueuedAt, nextAttemptAt, lastAttemptAt, lastError, leaseOwner, leaseExpiresAt]
+      properties:
+        missionId: { type: string }
+        basePriority: { type: integer, minimum: 0, maximum: 100 }
+        effectivePriority: { type: integer, minimum: 0, maximum: 100 }
+        attemptCount: { type: integer, minimum: 0 }
+        enqueuedAt: { type: string, format: date-time }
+        nextAttemptAt: { type: string, format: date-time }
+        lastAttemptAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"] }
+        leaseOwner: { type: [string, "null"] }
+        leaseExpiresAt: { type: [string, "null"], format: date-time }
+    DispatchQueue:
+      type: object
+      additionalProperties: false
+      required: [evaluatedAt, pendingMissions, dueMissions, leasedMissions, nextAttemptAt, entries]
+      properties:
+        evaluatedAt: { type: string, format: date-time }
+        pendingMissions: { type: integer, minimum: 0 }
+        dueMissions: { type: integer, minimum: 0 }
+        leasedMissions: { type: integer, minimum: 0 }
+        nextAttemptAt: { type: [string, "null"], format: date-time }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/MissionQueueEntry" }
     ErrorResponse:
       type: object
       required: [error]
