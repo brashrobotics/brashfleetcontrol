@@ -214,10 +214,74 @@ export interface MapTopologyView {
   edges: MapEdgeView[];
 }
 
+export type MapVersionStatus = "DRAFT" | "PUBLISHED" | "RETIRED";
+
+export interface MapVersionView {
+  mapId: string;
+  familyId: string;
+  displayName: string;
+  revision: number;
+  status: MapVersionStatus;
+  createdBy: string;
+  createdAt: string;
+  publishedBy: string | null;
+  publishedAt: string | null;
+  retiredBy: string | null;
+  retiredAt: string | null;
+  nodeCount: number;
+  edgeCount: number;
+}
+
+export interface CreateMapVersionRequest {
+  familyId: string;
+  displayName: string;
+  revision: number;
+  nodes: MapNodeView[];
+  edges: MapEdgeView[];
+  operatorId: string;
+}
+
+export type InfrastructureResourceType = "DOOR" | "ELEVATOR" | "CHARGER" | "DOCK" | "WORKCELL";
+export type InfrastructureResourceStatus = "AVAILABLE" | "UNAVAILABLE" | "MAINTENANCE";
+export type InfrastructureReservationPolicy = "TRANSIT_EXCLUSIVE" | "SERVICE_EXCLUSIVE";
+
+export interface InfrastructureResourceView {
+  resourceId: string;
+  mapId: string;
+  displayName: string;
+  type: InfrastructureResourceType;
+  status: InfrastructureResourceStatus;
+  reservationPolicy: InfrastructureReservationPolicy;
+  edgeId: string | null;
+  nodeId: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedBy: string;
+  updatedAt: string;
+  statusReason: string | null;
+}
+
+export interface CreateInfrastructureResourceRequest {
+  resourceId: string;
+  mapId: string;
+  displayName: string;
+  type: InfrastructureResourceType;
+  reservationPolicy: InfrastructureReservationPolicy;
+  edgeId?: string;
+  nodeId?: string;
+  operatorId: string;
+}
+
+export interface UpdateInfrastructureResourceStatusRequest {
+  status: InfrastructureResourceStatus;
+  reason: string;
+  operatorId: string;
+}
+
 export type RoutePhase = "TO_PICKUP" | "TO_DROPOFF";
 export type TrafficPlanStatus = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
 export type TrafficReservationState = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
-export type TrafficResourceType = "EDGE" | "NODE";
+export type TrafficResourceType = "EDGE" | "NODE" | "INFRASTRUCTURE";
 
 export interface TrafficRouteSegmentView {
   sequence: number;

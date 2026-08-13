@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.8.0
-  description: Vendor-independent mission queue, alarms, dynamic traffic restrictions, robot liveness, recovery, and operator control API.
+  version: 0.9.0
+  description: Vendor-independent missions, immutable map versions, infrastructure resources, traffic coordination, alarms, recovery, and operator control API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -113,6 +113,156 @@ paths:
                 required: [topology]
                 properties:
                   topology: { $ref: "#/components/schemas/MapTopology" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/map-versions:
+    get:
+      operationId: listMapVersions
+      parameters:
+        - name: familyId
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Immutable map revision catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [versions]
+                properties:
+                  versions:
+                    type: array
+                    items: { $ref: "#/components/schemas/MapVersion" }
+    post:
+      operationId: createMapVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMapVersionRequest" }
+      responses:
+        "201":
+          description: Draft map revision created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version: { $ref: "#/components/schemas/MapVersion" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/map-versions/{mapId}/publish:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    post:
+      operationId: publishMapVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlarmActionRequest" }
+      responses:
+        "200":
+          description: Draft map made available to missions and robots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version: { $ref: "#/components/schemas/MapVersion" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/map-versions/{mapId}/retire:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    post:
+      operationId: retireMapVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlarmActionRequest" }
+      responses:
+        "200":
+          description: Unused map revision retired
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version: { $ref: "#/components/schemas/MapVersion" }
+        "409":
+          description: Map is still in use or is the last published revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /api/v1/infrastructure/resources:
+    get:
+      operationId: listInfrastructureResources
+      parameters:
+        - name: mapId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Factory infrastructure catalog for a map revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resources]
+                properties:
+                  resources:
+                    type: array
+                    items: { $ref: "#/components/schemas/InfrastructureResource" }
+    post:
+      operationId: createInfrastructureResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateInfrastructureResourceRequest" }
+      responses:
+        "201":
+          description: Infrastructure resource created and topology-bound
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resource]
+                properties:
+                  resource: { $ref: "#/components/schemas/InfrastructureResource" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/infrastructure/resources/{resourceId}/status:
+    parameters:
+      - name: resourceId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1 }
+    post:
+      operationId: updateInfrastructureResourceStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateInfrastructureResourceStatusRequest" }
+      responses:
+        "200":
+          description: Resource availability updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resource]
+                properties:
+                  resource: { $ref: "#/components/schemas/InfrastructureResource" }
         "404":
           $ref: "#/components/responses/NotFound"
   /api/v1/traffic/schedule:
@@ -536,6 +686,84 @@ components:
         edges:
           type: array
           items: { $ref: "#/components/schemas/MapEdge" }
+    CreateMapVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [familyId, displayName, revision, nodes, edges, operatorId]
+      properties:
+        familyId: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        displayName: { type: string, minLength: 1 }
+        revision: { type: integer, minimum: 1 }
+        nodes:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/MapNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/MapEdge" }
+        operatorId: { type: string, minLength: 1 }
+    MapVersion:
+      type: object
+      additionalProperties: false
+      required: [mapId, familyId, displayName, revision, status, createdBy, createdAt, publishedBy, publishedAt, retiredBy, retiredAt, nodeCount, edgeCount]
+      properties:
+        mapId: { type: string }
+        familyId: { type: string }
+        displayName: { type: string }
+        revision: { type: integer, minimum: 1 }
+        status: { type: string, enum: [DRAFT, PUBLISHED, RETIRED] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        publishedBy: { type: [string, "null"] }
+        publishedAt: { type: [string, "null"], format: date-time }
+        retiredBy: { type: [string, "null"] }
+        retiredAt: { type: [string, "null"], format: date-time }
+        nodeCount: { type: integer, minimum: 1 }
+        edgeCount: { type: integer, minimum: 0 }
+    CreateInfrastructureResourceRequest:
+      type: object
+      additionalProperties: false
+      required: [resourceId, mapId, displayName, type, reservationPolicy, operatorId]
+      properties:
+        resourceId: { type: string, minLength: 1 }
+        mapId: { type: string, minLength: 1 }
+        displayName: { type: string, minLength: 1 }
+        type: { type: string, enum: [DOOR, ELEVATOR, CHARGER, DOCK, WORKCELL] }
+        reservationPolicy: { type: string, enum: [TRANSIT_EXCLUSIVE, SERVICE_EXCLUSIVE] }
+        edgeId: { type: string, minLength: 1 }
+        nodeId: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+      oneOf:
+        - required: [edgeId]
+          not: { required: [nodeId] }
+        - required: [nodeId]
+          not: { required: [edgeId] }
+    UpdateInfrastructureResourceStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, reason, operatorId]
+      properties:
+        status: { type: string, enum: [AVAILABLE, UNAVAILABLE, MAINTENANCE] }
+        reason: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+    InfrastructureResource:
+      type: object
+      additionalProperties: false
+      required: [resourceId, mapId, displayName, type, status, reservationPolicy, edgeId, nodeId, createdBy, createdAt, updatedBy, updatedAt, statusReason]
+      properties:
+        resourceId: { type: string }
+        mapId: { type: string }
+        displayName: { type: string }
+        type: { type: string, enum: [DOOR, ELEVATOR, CHARGER, DOCK, WORKCELL] }
+        status: { type: string, enum: [AVAILABLE, UNAVAILABLE, MAINTENANCE] }
+        reservationPolicy: { type: string, enum: [TRANSIT_EXCLUSIVE, SERVICE_EXCLUSIVE] }
+        edgeId: { type: [string, "null"] }
+        nodeId: { type: [string, "null"] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        statusReason: { type: [string, "null"] }
     TrafficRouteSegment:
       type: object
       additionalProperties: false
@@ -585,7 +813,7 @@ components:
         robotId: { type: string }
         mapId: { type: string }
         resourceId: { type: string }
-        resourceType: { type: string, enum: [EDGE, NODE] }
+        resourceType: { type: string, enum: [EDGE, NODE, INFRASTRUCTURE] }
         sequence: { type: integer, minimum: 0 }
         startsAt: { type: string, format: date-time }
         endsAt: { type: string, format: date-time }

@@ -143,6 +143,8 @@ curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/route
 curl http://127.0.0.1:4273/api/v1/recovery/status
 curl http://127.0.0.1:4273/api/v1/dispatch/queue
 curl http://127.0.0.1:4273/api/v1/alarms
+curl http://127.0.0.1:4273/api/v1/map-versions
+curl 'http://127.0.0.1:4273/api/v1/infrastructure/resources?mapId=plant-a%401'
 ```
 
 The operator dashboard renders the same topology and colors active/upcoming
@@ -170,6 +172,36 @@ curl -X POST http://127.0.0.1:4273/api/v1/traffic/restrictions/RESTRICTION_ID/cl
 Closing a resource does not silently revoke an already-issued robot route.
 That situation requires operator coordination because the robot may already be
 inside the affected area.
+
+Published topologies are immutable. Create a new draft revision with
+`POST /api/v1/map-versions`, review its topology, then publish it with:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/map-versions/plant-a%402/publish \
+  -H 'content-type: application/json' \
+  -d '{"operatorId":"map-approver"}'
+```
+
+Map IDs include the revision (`plant-a@2`). Retired revisions remain in the
+catalog for audit history but cannot receive new missions. Retirement is
+rejected while a robot or non-terminal mission still references the version.
+
+Register facility equipment against an edge or node. Doors and elevators use
+`TRANSIT_EXCLUSIVE`; chargers, docks, and workcells use `SERVICE_EXCLUSIVE`:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/infrastructure/resources \
+  -H 'content-type: application/json' \
+  -d '{"resourceId":"DOOR-07","mapId":"plant-a@1","displayName":"Door 07","type":"DOOR","reservationPolicy":"TRANSIT_EXCLUSIVE","edgeId":"E-CENTER-NORTH","operatorId":"facility-1"}'
+
+curl -X POST http://127.0.0.1:4273/api/v1/infrastructure/resources/DOOR-07/status \
+  -H 'content-type: application/json' \
+  -d '{"status":"MAINTENANCE","reason":"Quarterly inspection","operatorId":"facility-1"}'
+```
+
+New routes avoid unavailable transit resources. If a resource becomes
+unavailable after dispatch, Fleet Core preserves the issued route and raises a
+critical alarm instead of assuming the robot stopped safely.
 
 Robot heartbeat loss, recovery-required missions, command-delivery failures,
 and rejected cancellation requests create deduplicated alarms. Repeated

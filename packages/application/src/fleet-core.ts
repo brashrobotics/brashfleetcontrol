@@ -4,12 +4,17 @@ import {
   type AlarmView,
   type AssignmentDecision,
   type CommandReceipt,
+  type CreateInfrastructureResourceRequest,
+  type CreateMapVersionRequest,
   type CreateMissionRequest,
   type DispatchQueueView,
   type DispatchResult,
   type FleetRecoveryStatusView,
   type FleetSnapshot,
+  type InfrastructureResourceStatus,
+  type InfrastructureResourceView,
   type MapTopologyView,
+  type MapVersionView,
   type MissionCancellationResult,
   type MissionCommand,
   type MissionEventType,
@@ -22,6 +27,7 @@ import {
 } from "@brash/contracts";
 import {
   DomainError,
+  MapTopology,
   Mission,
   Robot,
   RobotLivenessPolicy,
@@ -44,11 +50,14 @@ import type {
   AlarmRecord,
   AlarmRepository,
   CommandRepository,
+  InfrastructureResourceRecord,
+  InfrastructureResourceRepository,
   MissionEventRepository,
   MissionQueueEntry,
   MissionQueueRepository,
   MissionRepository,
   MapTopologyRepository,
+  MapVersionRecord,
   PendingCommand,
   RobotRepository,
   TrafficPlanRepository,
@@ -67,6 +76,7 @@ export interface FleetCoreDependencies {
   decisions: AssignmentDecisionRepository;
   events: MissionEventRepository;
   maps: MapTopologyRepository;
+  infrastructureResources: InfrastructureResourceRepository;
   traffic: TrafficPlanRepository;
   trafficRestrictions: TrafficRestrictionRepository;
   transactions: TransactionManager;
@@ -212,6 +222,8 @@ export class FleetCore {
         if (existing) return missionToView(existing);
       }
 
+      await this.requirePublishedMap(request.pickup.mapId, true);
+
       const now = this.dependencies.clock.now();
       const mission = Mission.create({
         missionId: this.dependencies.ids.next("mission"),
@@ -282,13 +294,13 @@ export class FleetCore {
         return { mission, decision, command: null, route: null };
       }
 
-      const topology = await this.requireMapTopology(mission.pickup.mapId, true);
+      const topology = await this.requirePublishedMap(mission.pickup.mapId, true);
       const existingReservations = await this.dependencies.traffic.listActiveReservations(
         topology.mapId,
         now,
       );
       const previousRoute = await this.dependencies.traffic.getByMission(mission.missionId);
-      const restrictions = await this.dependencies.trafficRestrictions.listActive(topology.mapId);
+      const trafficControls = await this.getTrafficControls(topology.mapId);
       const route = this.dependencies.trafficScheduler.schedule({
         routeId: previousRoute?.routeId ?? this.dependencies.ids.next("route"),
         missionId: mission.missionId,
@@ -300,7 +312,8 @@ export class FleetCore {
         requestedStartAt: new Date(now.getTime() + 5_000),
         plannedAt: now,
         existingReservations,
-        excludedResourceIds: restrictions.map((restriction) => restriction.resourceId),
+        excludedResourceIds: trafficControls.excludedResourceIds,
+        infrastructureBindings: trafficControls.infrastructureBindings,
       });
 
       robot.reserve(mission.missionId, now);
@@ -562,6 +575,135 @@ export class FleetCore {
 
   async listMapTopologies(): Promise<MapTopologyView[]> {
     return (await this.dependencies.maps.list()).map(topologyToView);
+  }
+
+  async listMapVersions(familyId?: string): Promise<MapVersionView[]> {
+    return (await this.dependencies.maps.listVersions(familyId)).map((record) => this.mapVersionToView(record));
+  }
+
+  async createMapVersion(input: CreateMapVersionRequest): Promise<MapVersionView> {
+    const mapId = `${input.familyId}@${input.revision}`;
+    if ((await this.dependencies.maps.getVersion(mapId))) {
+      throw new DomainError("MAP_VERSION_EXISTS", `Map version ${mapId} already exists.`);
+    }
+    const topology = MapTopology.create({
+      mapId,
+      displayName: input.displayName,
+      revision: input.revision,
+      nodes: input.nodes.map((node) => ({ ...node })),
+      edges: input.edges.map((edge) => ({ ...edge })),
+    });
+    let created: MapVersionRecord;
+    try {
+      created = await this.dependencies.maps.createDraft(
+        topology,
+        input.familyId,
+        input.operatorId,
+        this.dependencies.clock.now(),
+      );
+    } catch (error) {
+      if (isUniqueConstraintViolation(error)) throw new DomainError("MAP_VERSION_EXISTS", `Map version ${mapId} already exists.`);
+      throw error;
+    }
+    return this.mapVersionToView(created);
+  }
+
+  async publishMapVersion(mapId: string, operatorId: string): Promise<MapVersionView> {
+    const version = await this.dependencies.maps.publish(mapId, operatorId, this.dependencies.clock.now());
+    if (!version) throw new DomainError("MAP_DRAFT_NOT_FOUND", `Draft map version ${mapId} was not found.`);
+    return this.mapVersionToView(version);
+  }
+
+  async retireMapVersion(mapId: string, operatorId: string): Promise<MapVersionView> {
+    const version = await this.dependencies.maps.getVersion(mapId);
+    if (!version || version.status !== "PUBLISHED") throw new DomainError("MAP_PUBLISHED_NOT_FOUND", `Published map version ${mapId} was not found.`);
+    const published = (await this.dependencies.maps.listVersions(version.familyId)).filter((candidate) => candidate.status === "PUBLISHED");
+    if (published.length <= 1) throw new DomainError("MAP_LAST_PUBLISHED_VERSION", `Publish a replacement for ${version.familyId} before retiring ${mapId}.`);
+    const activeMissionStates = new Set(["CREATED", "QUEUED", "ASSIGNED", "DISPATCHED", "EXECUTING", "RECOVERY_REQUIRED", "CANCELLING"]);
+    const inUseByMission = (await this.dependencies.missions.list()).find((mission) => {
+      const snapshot = mission.snapshot();
+      return snapshot.pickup.mapId === mapId && activeMissionStates.has(snapshot.state);
+    });
+    if (inUseByMission) throw new DomainError("MAP_VERSION_IN_USE", `${mapId} is used by mission ${inUseByMission.missionId}.`);
+    const robotOnMap = (await this.dependencies.robots.list()).find((robot) => robot.pose.mapId === mapId);
+    if (robotOnMap) throw new DomainError("MAP_VERSION_IN_USE", `${mapId} is still reported by robot ${robotOnMap.robotId}.`);
+    const retired = await this.dependencies.maps.retire(mapId, operatorId, this.dependencies.clock.now());
+    if (!retired) throw new DomainError("MAP_PUBLISHED_NOT_FOUND", `Published map version ${mapId} was not found.`);
+    return this.mapVersionToView(retired);
+  }
+
+  async listInfrastructureResources(mapId: string): Promise<InfrastructureResourceView[]> {
+    await this.requireMapTopology(mapId);
+    return (await this.dependencies.infrastructureResources.listByMap(mapId)).map((record) => this.infrastructureResourceToView(record));
+  }
+
+  async createInfrastructureResource(input: CreateInfrastructureResourceRequest): Promise<InfrastructureResourceView> {
+    const topology = await this.requireMapTopology(input.mapId);
+    const mapVersion = await this.dependencies.maps.getVersion(input.mapId);
+    if (!mapVersion || mapVersion.status === "RETIRED") throw new DomainError("MAP_VERSION_RETIRED", `Infrastructure cannot be added to retired map ${input.mapId}.`);
+    if (input.edgeId && !topology.edges.some((edge) => edge.edgeId === input.edgeId)) throw new DomainError("MAP_EDGE_NOT_FOUND", `Edge ${input.edgeId} was not found.`);
+    if (input.nodeId) topology.getNode(input.nodeId);
+    if (["DOOR", "ELEVATOR"].includes(input.type) && input.reservationPolicy !== "TRANSIT_EXCLUSIVE") {
+      throw new DomainError("INFRASTRUCTURE_POLICY_INVALID", `${input.type} must use TRANSIT_EXCLUSIVE reservation policy.`);
+    }
+    if (["CHARGER", "DOCK", "WORKCELL"].includes(input.type) && input.reservationPolicy !== "SERVICE_EXCLUSIVE") {
+      throw new DomainError("INFRASTRUCTURE_POLICY_INVALID", `${input.type} must use SERVICE_EXCLUSIVE reservation policy.`);
+    }
+    const existing = await this.dependencies.infrastructureResources.getById(input.resourceId);
+    if (existing) throw new DomainError("INFRASTRUCTURE_RESOURCE_EXISTS", `Infrastructure resource ${input.resourceId} already exists.`);
+    const now = this.dependencies.clock.now();
+    let created: InfrastructureResourceRecord;
+    try {
+      created = await this.dependencies.infrastructureResources.create({
+        resourceId: input.resourceId,
+        mapId: input.mapId,
+        displayName: input.displayName,
+        type: input.type,
+        status: "AVAILABLE",
+        reservationPolicy: input.reservationPolicy,
+        edgeId: input.edgeId ?? null,
+        nodeId: input.nodeId ?? null,
+        createdBy: input.operatorId,
+        createdAt: now,
+        updatedBy: input.operatorId,
+        updatedAt: now,
+        statusReason: null,
+      });
+    } catch (error) {
+      if (isUniqueConstraintViolation(error)) throw new DomainError("INFRASTRUCTURE_RESOURCE_EXISTS", `Infrastructure resource ${input.resourceId} already exists.`);
+      throw error;
+    }
+    return this.infrastructureResourceToView(created);
+  }
+
+  async updateInfrastructureResourceStatus(
+    resourceId: string,
+    status: InfrastructureResourceStatus,
+    reason: string,
+    operatorId: string,
+  ): Promise<InfrastructureResourceView> {
+    const now = this.dependencies.clock.now();
+    const updated = await this.dependencies.infrastructureResources.updateStatus(resourceId, status, reason, operatorId, now);
+    if (!updated) throw new DomainError("INFRASTRUCTURE_RESOURCE_NOT_FOUND", `Infrastructure resource ${resourceId} was not found.`);
+    const plans = await this.dependencies.traffic.listByMap(updated.mapId);
+    for (const plan of plans) {
+      const fingerprint = `infrastructure:${resourceId}:${plan.missionId}`;
+      if (status === "AVAILABLE") {
+        await this.dependencies.alarms.resolveByFingerprint(fingerprint, now);
+      } else if (plan.status === "ACTIVE" && plan.reservations.some((reservation) => reservation.resourceId === `infrastructure:${resourceId}`)) {
+        await this.dependencies.alarms.raise({
+          fingerprint,
+          code: "INFRASTRUCTURE_RESOURCE_UNAVAILABLE",
+          severity: "CRITICAL",
+          title: `${updated.displayName} is ${status.toLowerCase()}`,
+          message: `${plan.missionId} has an active reservation on ${resourceId}; operator coordination is required. Reason: ${reason}`,
+          sourceType: "TRAFFIC",
+          sourceId: plan.missionId,
+          occurredAt: now,
+        });
+      }
+    }
+    return this.infrastructureResourceToView(updated);
   }
 
   async getTrafficSchedule(mapId: string): Promise<TrafficScheduleView> {
@@ -1197,6 +1339,64 @@ export class FleetCore {
     };
   }
 
+  private mapVersionToView(record: MapVersionRecord): MapVersionView {
+    return {
+      mapId: record.topology.mapId,
+      familyId: record.familyId,
+      displayName: record.topology.displayName,
+      revision: record.topology.revision,
+      status: record.status,
+      createdBy: record.createdBy,
+      createdAt: record.createdAt.toISOString(),
+      publishedBy: record.publishedBy,
+      publishedAt: record.publishedAt?.toISOString() ?? null,
+      retiredBy: record.retiredBy,
+      retiredAt: record.retiredAt?.toISOString() ?? null,
+      nodeCount: record.topology.nodes.length,
+      edgeCount: record.topology.edges.length,
+    };
+  }
+
+  private infrastructureResourceToView(record: InfrastructureResourceRecord): InfrastructureResourceView {
+    return {
+      resourceId: record.resourceId,
+      mapId: record.mapId,
+      displayName: record.displayName,
+      type: record.type,
+      status: record.status,
+      reservationPolicy: record.reservationPolicy,
+      edgeId: record.edgeId,
+      nodeId: record.nodeId,
+      createdBy: record.createdBy,
+      createdAt: record.createdAt.toISOString(),
+      updatedBy: record.updatedBy,
+      updatedAt: record.updatedAt.toISOString(),
+      statusReason: record.statusReason,
+    };
+  }
+
+  private async getTrafficControls(mapId: string): Promise<{
+    excludedResourceIds: string[];
+    infrastructureBindings: Array<{ resourceId: string; edgeId: string | null; nodeId: string | null }>;
+  }> {
+    const [restrictions, resources] = await Promise.all([
+      this.dependencies.trafficRestrictions.listActive(mapId),
+      this.dependencies.infrastructureResources.listByMap(mapId),
+    ]);
+    const transitResources = resources.filter((resource) => resource.reservationPolicy === "TRANSIT_EXCLUSIVE");
+    return {
+      excludedResourceIds: [
+        ...restrictions.map((restriction) => restriction.resourceId),
+        ...transitResources.filter((resource) => resource.status !== "AVAILABLE").map((resource) => resource.edgeId ? `edge:${resource.edgeId}` : `node:${resource.nodeId}`),
+      ],
+      infrastructureBindings: transitResources.filter((resource) => resource.status === "AVAILABLE").map((resource) => ({
+        resourceId: resource.resourceId,
+        edgeId: resource.edgeId,
+        nodeId: resource.nodeId,
+      })),
+    };
+  }
+
   private async appendMissionEvent(
     mission: Mission,
     type: MissionEventType,
@@ -1278,7 +1478,7 @@ export class FleetCore {
         now,
         mission.missionId,
       );
-      const restrictions = await this.dependencies.trafficRestrictions.listActive(current.mapId);
+      const trafficControls = await this.getTrafficControls(current.mapId);
       const route = this.dependencies.trafficScheduler.schedule({
         routeId: current.routeId,
         missionId: mission.missionId,
@@ -1290,7 +1490,8 @@ export class FleetCore {
         requestedStartAt: new Date(now.getTime() + 5_000),
         plannedAt: now,
         existingReservations,
-        excludedResourceIds: restrictions.map((restriction) => restriction.resourceId),
+        excludedResourceIds: trafficControls.excludedResourceIds,
+        infrastructureBindings: trafficControls.infrastructureBindings,
       });
       await this.dependencies.traffic.save(route);
       const refreshed = this.buildCommand(mission, robot.robotId, command.commandId, now, route);
@@ -1318,7 +1519,18 @@ export class FleetCore {
     return topology;
   }
 
+  private async requirePublishedMap(mapId: string, forUpdate = false) {
+    const version = await this.dependencies.maps.getVersion(mapId, { forUpdate });
+    if (!version) throw new DomainError("MAP_NOT_FOUND", `Map topology ${mapId} was not found.`);
+    if (version.status !== "PUBLISHED") throw new DomainError("MAP_VERSION_NOT_PUBLISHED", `Map version ${mapId} is ${version.status.toLowerCase()}.`);
+    return version.topology;
+  }
+
   private assertStarted(): void {
     if (!this.started) throw new Error("Fleet Core has not been started.");
   }
+}
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
 }

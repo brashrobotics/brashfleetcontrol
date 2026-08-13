@@ -1,4 +1,17 @@
-import type { AlarmActionRequest, CreateMissionRequest, CreateTrafficRestrictionRequest, MissionLocation } from "./fleet-contracts.js";
+import type {
+  AlarmActionRequest,
+  CreateInfrastructureResourceRequest,
+  CreateMapVersionRequest,
+  CreateMissionRequest,
+  CreateTrafficRestrictionRequest,
+  InfrastructureReservationPolicy,
+  InfrastructureResourceStatus,
+  InfrastructureResourceType,
+  MapEdgeView,
+  MapNodeView,
+  MissionLocation,
+  UpdateInfrastructureResourceStatusRequest,
+} from "./fleet-contracts.js";
 
 export class ContractValidationError extends Error {
   readonly issues: string[];
@@ -118,4 +131,104 @@ export function parseCreateTrafficRestrictionRequest(value: unknown): CreateTraf
   const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
   if (issues.length > 0) throw new ContractValidationError(issues);
   return { mapId, resourceId, reason, operatorId };
+}
+
+export function parseCreateMapVersionRequest(value: unknown): CreateMapVersionRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const familyId = nonEmptyString(value.familyId, "familyId", issues);
+  if (familyId && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(familyId)) issues.push("familyId must be a lowercase kebab-case identifier.");
+  const displayName = nonEmptyString(value.displayName, "displayName", issues);
+  const revision = finiteNumber(value.revision, "revision", issues);
+  if (!Number.isInteger(revision) || revision < 1) issues.push("revision must be a positive integer.");
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  const nodes = parseMapNodes(value.nodes, issues);
+  const edges = parseMapEdges(value.edges, issues);
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { familyId, displayName, revision, nodes, edges, operatorId };
+}
+
+export function parseCreateInfrastructureResourceRequest(value: unknown): CreateInfrastructureResourceRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const resourceId = nonEmptyString(value.resourceId, "resourceId", issues);
+  if (resourceId && !/^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/.test(resourceId)) issues.push("resourceId contains unsupported characters.");
+  const mapId = nonEmptyString(value.mapId, "mapId", issues);
+  const displayName = nonEmptyString(value.displayName, "displayName", issues);
+  const type = enumValue(value.type, ["DOOR", "ELEVATOR", "CHARGER", "DOCK", "WORKCELL"] as const, "type", issues);
+  const reservationPolicy = enumValue(value.reservationPolicy, ["TRANSIT_EXCLUSIVE", "SERVICE_EXCLUSIVE"] as const, "reservationPolicy", issues);
+  const edgeId = value.edgeId === undefined ? undefined : nonEmptyString(value.edgeId, "edgeId", issues);
+  const nodeId = value.nodeId === undefined ? undefined : nonEmptyString(value.nodeId, "nodeId", issues);
+  if (Boolean(edgeId) === Boolean(nodeId)) issues.push("exactly one of edgeId or nodeId is required.");
+  if (reservationPolicy === "TRANSIT_EXCLUSIVE" && !edgeId && !nodeId) issues.push("transit resources require a map binding.");
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { resourceId, mapId, displayName, type: type as InfrastructureResourceType, reservationPolicy: reservationPolicy as InfrastructureReservationPolicy, ...(edgeId ? { edgeId } : {}), ...(nodeId ? { nodeId } : {}), operatorId };
+}
+
+export function parseUpdateInfrastructureResourceStatusRequest(value: unknown): UpdateInfrastructureResourceStatusRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const status = enumValue(value.status, ["AVAILABLE", "UNAVAILABLE", "MAINTENANCE"] as const, "status", issues);
+  const reason = nonEmptyString(value.reason, "reason", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { status: status as InfrastructureResourceStatus, reason, operatorId };
+}
+
+function parseMapNodes(value: unknown, issues: string[]): MapNodeView[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push("nodes must contain at least one map node.");
+    return [];
+  }
+  return value.map((item, index) => {
+    const path = `nodes[${index}]`;
+    if (!isRecord(item)) {
+      issues.push(`${path} must be an object.`);
+      return { nodeId: "", label: "", kind: "WAYPOINT", x: 0, y: 0 };
+    }
+    const kind = enumValue(item.kind, ["WAYPOINT", "INTERSECTION", "STATION", "HOLDING_POINT"] as const, `${path}.kind`, issues);
+    const stationId = item.stationId === undefined ? undefined : nonEmptyString(item.stationId, `${path}.stationId`, issues);
+    const zoneId = item.zoneId === undefined ? undefined : nonEmptyString(item.zoneId, `${path}.zoneId`, issues);
+    return {
+      nodeId: nonEmptyString(item.nodeId, `${path}.nodeId`, issues),
+      label: nonEmptyString(item.label, `${path}.label`, issues),
+      kind: kind as MapNodeView["kind"],
+      x: finiteNumber(item.x, `${path}.x`, issues),
+      y: finiteNumber(item.y, `${path}.y`, issues),
+      ...(stationId ? { stationId } : {}),
+      ...(zoneId ? { zoneId } : {}),
+    };
+  });
+}
+
+function parseMapEdges(value: unknown, issues: string[]): MapEdgeView[] {
+  if (!Array.isArray(value)) {
+    issues.push("edges must be an array.");
+    return [];
+  }
+  return value.map((item, index) => {
+    const path = `edges[${index}]`;
+    if (!isRecord(item)) {
+      issues.push(`${path} must be an object.`);
+      return { edgeId: "", fromNodeId: "", toNodeId: "", directed: false, lengthMeters: 0, travelTimeSeconds: 0 };
+    }
+    if (typeof item.directed !== "boolean") issues.push(`${path}.directed must be a boolean.`);
+    return {
+      edgeId: nonEmptyString(item.edgeId, `${path}.edgeId`, issues),
+      fromNodeId: nonEmptyString(item.fromNodeId, `${path}.fromNodeId`, issues),
+      toNodeId: nonEmptyString(item.toNodeId, `${path}.toNodeId`, issues),
+      directed: typeof item.directed === "boolean" ? item.directed : false,
+      lengthMeters: finiteNumber(item.lengthMeters, `${path}.lengthMeters`, issues),
+      travelTimeSeconds: finiteNumber(item.travelTimeSeconds, `${path}.travelTimeSeconds`, issues),
+    };
+  });
+}
+
+function enumValue<const T extends readonly string[]>(value: unknown, allowed: T, path: string, issues: string[]): T[number] | "" {
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    issues.push(`${path} must be one of ${allowed.join(", ")}.`);
+    return "";
+  }
+  return value as T[number];
 }

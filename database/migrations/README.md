@@ -65,6 +65,13 @@ Keep this README current as implementation is added, and define ownership, valid
 - Operator-managed edge and node closures with responsible identities and reasons.
 - One active restriction per map resource while retaining cleared restriction history.
 
+`009_map_versions_and_infrastructure.sql` adds:
+
+- Immutable draft/published/retired metadata around each topology revision.
+- A family/revision uniqueness constraint for safe map publication.
+- A typed factory infrastructure catalog with topology bindings and operational status.
+- Infrastructure resources as first-class traffic reservation targets.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

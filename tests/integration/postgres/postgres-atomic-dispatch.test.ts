@@ -7,7 +7,7 @@ import {
   createDefaultPlantTopology,
   type IdGenerator,
 } from "@brash/application";
-import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
+import { MapTopology, RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { loadPersistenceConfig } from "@brash/config";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import { PostgresPersistence } from "@brash/persistence";
@@ -379,6 +379,62 @@ test("PostgreSQL persists one active traffic restriction and allows reopening af
   }
 });
 
+test("PostgreSQL persists map publication and infrastructure status history", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const familyId = `pg-map-${suffix}`;
+  const mapId = `${familyId}@1`;
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  const now = new Date();
+  const topology = MapTopology.create({
+    mapId,
+    displayName: "PostgreSQL map lifecycle test",
+    revision: 1,
+    nodes: [
+      { nodeId: "A", label: "A", kind: "STATION", stationId: "A", x: 0, y: 0 },
+      { nodeId: "B", label: "B", kind: "STATION", stationId: "B", x: 10, y: 0 },
+    ],
+    edges: [{ edgeId: "AB", fromNodeId: "A", toNodeId: "B", directed: false, lengthMeters: 10, travelTimeSeconds: 10 }],
+  });
+
+  try {
+    const draft = await persistence.maps.createDraft(topology, familyId, "postgres-map-engineer", now);
+    assert.equal(draft.status, "DRAFT");
+    const published = await persistence.maps.publish(mapId, "postgres-map-approver", new Date(now.getTime() + 1_000));
+    assert.equal(published?.status, "PUBLISHED");
+
+    const resource = await persistence.infrastructureResources.create({
+      resourceId: `PG-DOOR-${suffix}`,
+      mapId,
+      displayName: "PostgreSQL test door",
+      type: "DOOR",
+      status: "AVAILABLE",
+      reservationPolicy: "TRANSIT_EXCLUSIVE",
+      edgeId: "AB",
+      nodeId: null,
+      createdBy: "postgres-facility-engineer",
+      createdAt: now,
+      updatedBy: "postgres-facility-engineer",
+      updatedAt: now,
+      statusReason: null,
+    });
+    assert.equal(resource.status, "AVAILABLE");
+    const unavailable = await persistence.infrastructureResources.updateStatus(
+      resource.resourceId, "MAINTENANCE", "Integration test", "postgres-facility-engineer", new Date(now.getTime() + 2_000),
+    );
+    assert.equal(unavailable?.status, "MAINTENANCE");
+    assert.equal((await persistence.infrastructureResources.listByMap(mapId))[0].statusReason, "Integration test");
+
+    const retired = await persistence.maps.retire(mapId, "postgres-map-approver", new Date(now.getTime() + 3_000));
+    assert.equal(retired?.status, "RETIRED");
+    assert.equal((await persistence.maps.listVersions(familyId))[0].retiredBy, "postgres-map-approver");
+  } finally {
+    await persistence.close();
+  }
+});
+
 async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): Promise<void> {
   const stale = await persistence.database.query<{ mission_id: string }>(`
     SELECT mission_id
@@ -423,6 +479,7 @@ function createCore(
     decisions: persistence.decisions,
     events: persistence.events,
     maps: persistence.maps,
+    infrastructureResources: persistence.infrastructureResources,
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
     transactions: persistence.transactions,
@@ -454,6 +511,7 @@ function createMultiRobotCore(
     decisions: persistence.decisions,
     events: persistence.events,
     maps: persistence.maps,
+    infrastructureResources: persistence.infrastructureResources,
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
     transactions: persistence.transactions,

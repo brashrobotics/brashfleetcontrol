@@ -4,6 +4,8 @@ import type {
   AlarmRepository,
   CommandClaimOptions,
   CommandRepository,
+  InfrastructureResourceRecord,
+  InfrastructureResourceRepository,
   MissionEventRepository,
   MissionQueueClaimOptions,
   MissionQueueEntry,
@@ -11,6 +13,7 @@ import type {
   MissionQueueRepository,
   MissionRepository,
   MapTopologyRepository,
+  MapVersionRecord,
   NewMissionEvent,
   PendingCommand,
   RepositoryReadOptions,
@@ -26,6 +29,7 @@ import type {
   CommandReceipt,
   MissionCommand,
   MissionEventView,
+  InfrastructureResourceStatus,
 } from "@brash/contracts";
 
 export class InMemoryAlarmRepository implements AlarmRepository {
@@ -440,23 +444,143 @@ export class InMemoryCommandRepository implements CommandRepository {
 }
 
 export class InMemoryMapTopologyRepository implements MapTopologyRepository {
-  private readonly topologies = new Map<string, MapTopology>();
+  private readonly versions = new Map<string, MapVersionRecord>();
 
   constructor(initial: MapTopology[] = []) {
-    for (const topology of initial) this.topologies.set(topology.mapId, topology);
+    for (const topology of initial) {
+      this.versions.set(topology.mapId, {
+        topology,
+        familyId: familyIdFor(topology.mapId),
+        status: "PUBLISHED",
+        createdBy: "system-bootstrap",
+        createdAt: new Date(0),
+        publishedBy: "system-bootstrap",
+        publishedAt: new Date(0),
+        retiredBy: null,
+        retiredAt: null,
+      });
+    }
   }
 
   async getById(mapId: string, _options?: RepositoryReadOptions): Promise<MapTopology | null> {
-    return this.topologies.get(mapId) ?? null;
+    return this.versions.get(mapId)?.topology ?? null;
   }
 
   async list(): Promise<MapTopology[]> {
-    return [...this.topologies.values()].sort((left, right) => left.mapId.localeCompare(right.mapId));
+    return [...this.versions.values()].filter((record) => record.status === "PUBLISHED").map((record) => record.topology).sort((left, right) => left.mapId.localeCompare(right.mapId));
   }
 
   async save(topology: MapTopology): Promise<void> {
-    this.topologies.set(topology.mapId, topology);
+    const existing = this.versions.get(topology.mapId);
+    if (existing) {
+      if (JSON.stringify(existing.topology.snapshot()) !== JSON.stringify(topology.snapshot())) throw new Error(`Published map ${topology.mapId} is immutable; create a new revision.`);
+      return;
+    }
+    this.versions.set(topology.mapId, {
+      topology,
+      familyId: familyIdFor(topology.mapId),
+      status: "PUBLISHED",
+      createdBy: "system-bootstrap",
+      createdAt: new Date(),
+      publishedBy: "system-bootstrap",
+      publishedAt: new Date(),
+      retiredBy: null,
+      retiredAt: null,
+    });
   }
+
+  async getVersion(mapId: string, _options?: RepositoryReadOptions): Promise<MapVersionRecord | null> {
+    const record = this.versions.get(mapId);
+    return record ? cloneMapVersion(record) : null;
+  }
+
+  async listVersions(familyId?: string): Promise<MapVersionRecord[]> {
+    return [...this.versions.values()]
+      .filter((record) => !familyId || record.familyId === familyId)
+      .sort((left, right) => left.familyId.localeCompare(right.familyId) || left.topology.revision - right.topology.revision)
+      .map(cloneMapVersion);
+  }
+
+  async createDraft(topology: MapTopology, familyId: string, operatorId: string, at: Date): Promise<MapVersionRecord> {
+    if (this.versions.has(topology.mapId) || [...this.versions.values()].some((record) => record.familyId === familyId && record.topology.revision === topology.revision)) {
+      throw new Error(`Map revision ${familyId}@${topology.revision} already exists.`);
+    }
+    const record: MapVersionRecord = {
+      topology, familyId, status: "DRAFT", createdBy: operatorId, createdAt: new Date(at),
+      publishedBy: null, publishedAt: null, retiredBy: null, retiredAt: null,
+    };
+    this.versions.set(topology.mapId, record);
+    return cloneMapVersion(record);
+  }
+
+  async publish(mapId: string, operatorId: string, at: Date): Promise<MapVersionRecord | null> {
+    const record = this.versions.get(mapId);
+    if (!record || record.status !== "DRAFT") return null;
+    record.status = "PUBLISHED";
+    record.publishedBy = operatorId;
+    record.publishedAt = new Date(at);
+    return cloneMapVersion(record);
+  }
+
+  async retire(mapId: string, operatorId: string, at: Date): Promise<MapVersionRecord | null> {
+    const record = this.versions.get(mapId);
+    if (!record || record.status !== "PUBLISHED") return null;
+    record.status = "RETIRED";
+    record.retiredBy = operatorId;
+    record.retiredAt = new Date(at);
+    return cloneMapVersion(record);
+  }
+}
+
+export class InMemoryInfrastructureResourceRepository implements InfrastructureResourceRepository {
+  private readonly resources = new Map<string, InfrastructureResourceRecord>();
+
+  constructor(initial: InfrastructureResourceRecord[] = []) {
+    for (const resource of initial) this.resources.set(resource.resourceId, cloneInfrastructureResource(resource));
+  }
+
+  async getById(resourceId: string, _options?: RepositoryReadOptions): Promise<InfrastructureResourceRecord | null> {
+    const resource = this.resources.get(resourceId);
+    return resource ? cloneInfrastructureResource(resource) : null;
+  }
+
+  async listByMap(mapId: string): Promise<InfrastructureResourceRecord[]> {
+    return [...this.resources.values()].filter((resource) => resource.mapId === mapId)
+      .sort((left, right) => left.resourceId.localeCompare(right.resourceId)).map(cloneInfrastructureResource);
+  }
+
+  async create(resource: InfrastructureResourceRecord): Promise<InfrastructureResourceRecord> {
+    if (this.resources.has(resource.resourceId)) throw new Error(`Infrastructure resource ${resource.resourceId} already exists.`);
+    this.resources.set(resource.resourceId, cloneInfrastructureResource(resource));
+    return cloneInfrastructureResource(resource);
+  }
+
+  async updateStatus(resourceId: string, status: InfrastructureResourceStatus, reason: string, operatorId: string, at: Date): Promise<InfrastructureResourceRecord | null> {
+    const resource = this.resources.get(resourceId);
+    if (!resource) return null;
+    resource.status = status;
+    resource.statusReason = reason;
+    resource.updatedBy = operatorId;
+    resource.updatedAt = new Date(at);
+    return cloneInfrastructureResource(resource);
+  }
+}
+
+function cloneMapVersion(record: MapVersionRecord): MapVersionRecord {
+  return {
+    ...record,
+    createdAt: new Date(record.createdAt),
+    publishedAt: record.publishedAt ? new Date(record.publishedAt) : null,
+    retiredAt: record.retiredAt ? new Date(record.retiredAt) : null,
+  };
+}
+
+function cloneInfrastructureResource(record: InfrastructureResourceRecord): InfrastructureResourceRecord {
+  return { ...record, createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt) };
+}
+
+function familyIdFor(mapId: string): string {
+  return mapId.match(/^(.+)@\d+$/)?.[1] ?? mapId;
 }
 
 export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {

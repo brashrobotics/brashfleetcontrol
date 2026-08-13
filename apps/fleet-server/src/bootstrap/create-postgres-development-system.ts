@@ -10,13 +10,18 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
-import { createDevelopmentAdapter } from "./create-development-system.js";
+import { createDevelopmentAdapter, defaultInfrastructureResources } from "./create-development-system.js";
 
 export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
   const persistence = new PostgresPersistence(config);
   try {
     await persistence.migrate();
     await persistence.maps.save(createDefaultPlantTopology());
+    for (const resource of defaultInfrastructureResources()) {
+      if (!await persistence.infrastructureResources.getById(resource.resourceId)) {
+        await persistence.infrastructureResources.create(resource);
+      }
+    }
     const adapter = createDevelopmentAdapter();
     const core = new FleetCore({
       alarms: persistence.alarms,
@@ -27,6 +32,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       decisions: persistence.decisions,
       events: persistence.events,
       maps: persistence.maps,
+      infrastructureResources: persistence.infrastructureResources,
       traffic: persistence.traffic,
       trafficRestrictions: persistence.trafficRestrictions,
       transactions: persistence.transactions,

@@ -4,7 +4,10 @@ import type {
   AssignmentDecisionRepository,
   CommandClaimOptions,
   CommandRepository,
+  InfrastructureResourceRecord,
+  InfrastructureResourceRepository,
   MapTopologyRepository,
+  MapVersionRecord,
   MissionEventRepository,
   MissionQueueClaimOptions,
   MissionQueueEntry,
@@ -26,6 +29,7 @@ import type {
   AlarmStatus,
   AssignmentDecision,
   CommandReceipt,
+  InfrastructureResourceStatus,
   MissionCommand,
   MissionEventType,
   MissionEventView,
@@ -143,6 +147,30 @@ interface TrafficRestrictionRow {
 
 interface MapTopologyRow {
   topology: MapTopologySnapshot;
+  family_id: string;
+  status: MapVersionRecord["status"];
+  created_by: string;
+  created_at: Date;
+  published_by: string | null;
+  published_at: Date | null;
+  retired_by: string | null;
+  retired_at: Date | null;
+}
+
+interface InfrastructureResourceRow {
+  resource_id: string;
+  map_id: string;
+  display_name: string;
+  resource_type: InfrastructureResourceRecord["type"];
+  status: InfrastructureResourceRecord["status"];
+  reservation_policy: InfrastructureResourceRecord["reservationPolicy"];
+  edge_id: string | null;
+  node_id: string | null;
+  created_by: string;
+  created_at: Date;
+  updated_by: string;
+  updated_at: Date;
+  status_reason: string | null;
 }
 
 interface TrafficPlanRow {
@@ -742,7 +770,7 @@ export class PostgresMapTopologyRepository implements MapTopologyRepository {
 
   async getById(mapId: string, options?: RepositoryReadOptions): Promise<MapTopology | null> {
     const result = await this.database.query<MapTopologyRow>(
-      `SELECT topology FROM map_topologies WHERE map_id = $1${lockClause(options)}`,
+      `SELECT * FROM map_topologies WHERE map_id = $1${lockClause(options)}`,
       [mapId],
     );
     return result.rows[0] ? MapTopology.restore(structuredClone(result.rows[0].topology)) : null;
@@ -750,7 +778,7 @@ export class PostgresMapTopologyRepository implements MapTopologyRepository {
 
   async list(): Promise<MapTopology[]> {
     const result = await this.database.query<MapTopologyRow>(
-      "SELECT topology FROM map_topologies ORDER BY map_id",
+      "SELECT * FROM map_topologies WHERE status = 'PUBLISHED' ORDER BY map_id",
     );
     return result.rows.map((row) => MapTopology.restore(structuredClone(row.topology)));
   }
@@ -758,15 +786,110 @@ export class PostgresMapTopologyRepository implements MapTopologyRepository {
   async save(topology: MapTopology): Promise<void> {
     const snapshot = topology.snapshot();
     await this.database.query(`
-      INSERT INTO map_topologies (map_id, display_name, revision, topology, updated_at)
-      VALUES ($1, $2, $3, $4::jsonb, now())
-      ON CONFLICT (map_id) DO UPDATE SET
-        display_name = EXCLUDED.display_name,
-        revision = EXCLUDED.revision,
-        topology = EXCLUDED.topology,
-        updated_at = EXCLUDED.updated_at
-      WHERE map_topologies.revision <= EXCLUDED.revision
-    `, [snapshot.mapId, snapshot.displayName, snapshot.revision, JSON.stringify(snapshot)]);
+      INSERT INTO map_topologies (
+        map_id, family_id, display_name, revision, topology, status,
+        created_by, published_by, published_at, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5::jsonb, 'PUBLISHED',
+        'system-bootstrap', 'system-bootstrap', now(), now(), now())
+      ON CONFLICT (map_id) DO NOTHING
+    `, [snapshot.mapId, familyIdFor(snapshot.mapId), snapshot.displayName, snapshot.revision, JSON.stringify(snapshot)]);
+    const comparison = await this.database.query<{ matches: boolean }>(
+      "SELECT topology = $2::jsonb AS matches FROM map_topologies WHERE map_id = $1",
+      [snapshot.mapId, JSON.stringify(snapshot)],
+    );
+    if (!comparison.rows[0]?.matches) {
+      throw new Error(`Published map ${snapshot.mapId} is immutable; create a new revision.`);
+    }
+  }
+
+  async getVersion(mapId: string, options?: RepositoryReadOptions): Promise<MapVersionRecord | null> {
+    const result = await this.database.query<MapTopologyRow>(
+      `SELECT * FROM map_topologies WHERE map_id = $1${lockClause(options)}`,
+      [mapId],
+    );
+    return result.rows[0] ? mapVersionFromRow(result.rows[0]) : null;
+  }
+
+  async listVersions(familyId?: string): Promise<MapVersionRecord[]> {
+    const result = familyId
+      ? await this.database.query<MapTopologyRow>("SELECT * FROM map_topologies WHERE family_id = $1 ORDER BY revision", [familyId])
+      : await this.database.query<MapTopologyRow>("SELECT * FROM map_topologies ORDER BY family_id, revision");
+    return result.rows.map(mapVersionFromRow);
+  }
+
+  async createDraft(topology: MapTopology, familyId: string, operatorId: string, at: Date): Promise<MapVersionRecord> {
+    const snapshot = topology.snapshot();
+    const result = await this.database.query<MapTopologyRow>(`
+      INSERT INTO map_topologies (
+        map_id, family_id, display_name, revision, topology, status,
+        created_by, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5::jsonb, 'DRAFT', $6, $7, $7)
+      RETURNING *
+    `, [snapshot.mapId, familyId, snapshot.displayName, snapshot.revision, JSON.stringify(snapshot), operatorId, at]);
+    return mapVersionFromRow(result.rows[0]);
+  }
+
+  async publish(mapId: string, operatorId: string, at: Date): Promise<MapVersionRecord | null> {
+    const result = await this.database.query<MapTopologyRow>(`
+      UPDATE map_topologies SET status = 'PUBLISHED', published_by = $2,
+        published_at = $3, updated_at = $3
+      WHERE map_id = $1 AND status = 'DRAFT'
+      RETURNING *
+    `, [mapId, operatorId, at]);
+    return result.rows[0] ? mapVersionFromRow(result.rows[0]) : null;
+  }
+
+  async retire(mapId: string, operatorId: string, at: Date): Promise<MapVersionRecord | null> {
+    const result = await this.database.query<MapTopologyRow>(`
+      UPDATE map_topologies SET status = 'RETIRED', retired_by = $2,
+        retired_at = $3, updated_at = $3
+      WHERE map_id = $1 AND status = 'PUBLISHED'
+      RETURNING *
+    `, [mapId, operatorId, at]);
+    return result.rows[0] ? mapVersionFromRow(result.rows[0]) : null;
+  }
+}
+
+export class PostgresInfrastructureResourceRepository implements InfrastructureResourceRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async getById(resourceId: string, options?: RepositoryReadOptions): Promise<InfrastructureResourceRecord | null> {
+    const result = await this.database.query<InfrastructureResourceRow>(
+      `SELECT * FROM infrastructure_resources WHERE resource_id = $1${lockClause(options)}`,
+      [resourceId],
+    );
+    return result.rows[0] ? infrastructureResourceFromRow(result.rows[0]) : null;
+  }
+
+  async listByMap(mapId: string): Promise<InfrastructureResourceRecord[]> {
+    const result = await this.database.query<InfrastructureResourceRow>(
+      "SELECT * FROM infrastructure_resources WHERE map_id = $1 ORDER BY resource_id",
+      [mapId],
+    );
+    return result.rows.map(infrastructureResourceFromRow);
+  }
+
+  async create(resource: InfrastructureResourceRecord): Promise<InfrastructureResourceRecord> {
+    const result = await this.database.query<InfrastructureResourceRow>(`
+      INSERT INTO infrastructure_resources (
+        resource_id, map_id, display_name, resource_type, status, reservation_policy,
+        edge_id, node_id, created_by, created_at, updated_by, updated_at, status_reason
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      RETURNING *
+    `, [resource.resourceId, resource.mapId, resource.displayName, resource.type, resource.status,
+      resource.reservationPolicy, resource.edgeId, resource.nodeId, resource.createdBy, resource.createdAt,
+      resource.updatedBy, resource.updatedAt, resource.statusReason]);
+    return infrastructureResourceFromRow(result.rows[0]);
+  }
+
+  async updateStatus(resourceId: string, status: InfrastructureResourceStatus, reason: string, operatorId: string, at: Date): Promise<InfrastructureResourceRecord | null> {
+    const result = await this.database.query<InfrastructureResourceRow>(`
+      UPDATE infrastructure_resources SET status = $2, status_reason = $3,
+        updated_by = $4, updated_at = $5
+      WHERE resource_id = $1 RETURNING *
+    `, [resourceId, status, reason, operatorId, at]);
+    return result.rows[0] ? infrastructureResourceFromRow(result.rows[0]) : null;
   }
 }
 
@@ -1065,6 +1188,42 @@ function trafficRestrictionFromRow(row: TrafficRestrictionRow): TrafficRestricti
     status: row.status, reason: row.reason, createdBy: row.created_by, createdAt: new Date(row.created_at),
     clearedBy: row.cleared_by, clearedAt: row.cleared_at ? new Date(row.cleared_at) : null,
   };
+}
+
+function mapVersionFromRow(row: MapTopologyRow): MapVersionRecord {
+  return {
+    topology: MapTopology.restore(structuredClone(row.topology)),
+    familyId: row.family_id,
+    status: row.status,
+    createdBy: row.created_by,
+    createdAt: new Date(row.created_at),
+    publishedBy: row.published_by,
+    publishedAt: row.published_at ? new Date(row.published_at) : null,
+    retiredBy: row.retired_by,
+    retiredAt: row.retired_at ? new Date(row.retired_at) : null,
+  };
+}
+
+function infrastructureResourceFromRow(row: InfrastructureResourceRow): InfrastructureResourceRecord {
+  return {
+    resourceId: row.resource_id,
+    mapId: row.map_id,
+    displayName: row.display_name,
+    type: row.resource_type,
+    status: row.status,
+    reservationPolicy: row.reservation_policy,
+    edgeId: row.edge_id,
+    nodeId: row.node_id,
+    createdBy: row.created_by,
+    createdAt: new Date(row.created_at),
+    updatedBy: row.updated_by,
+    updatedAt: new Date(row.updated_at),
+    statusReason: row.status_reason,
+  };
+}
+
+function familyIdFor(mapId: string): string {
+  return mapId.match(/^(.+)@\d+$/)?.[1] ?? mapId;
 }
 
 function trafficReservationFromRow(row: TrafficReservationRow): TrafficReservationSnapshot {

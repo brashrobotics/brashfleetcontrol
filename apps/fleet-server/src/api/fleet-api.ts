@@ -1,4 +1,12 @@
-import { ContractValidationError, parseAlarmActionRequest, parseCreateMissionRequest, parseCreateTrafficRestrictionRequest } from "@brash/contracts";
+import {
+  ContractValidationError,
+  parseAlarmActionRequest,
+  parseCreateInfrastructureResourceRequest,
+  parseCreateMapVersionRequest,
+  parseCreateMissionRequest,
+  parseCreateTrafficRestrictionRequest,
+  parseUpdateInfrastructureResourceStatusRequest,
+} from "@brash/contracts";
 import { DomainError } from "@brash/domain";
 import type { FleetCore } from "@brash/application";
 
@@ -56,6 +64,25 @@ export class FleetApi {
         return json({ maps: await this.core.listMapTopologies() });
       }
 
+      if (request.method === "GET" && url.pathname === "/api/v1/map-versions") {
+        return json({ versions: await this.core.listMapVersions(url.searchParams.get("familyId") ?? undefined) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/v1/map-versions") {
+        const input = parseCreateMapVersionRequest(await request.json());
+        return json({ version: await this.core.createMapVersion(input) }, 201);
+      }
+
+      const mapPublicationMatch = url.pathname.match(/^\/api\/v1\/map-versions\/([^/]+)\/(publish|retire)$/);
+      if (request.method === "POST" && mapPublicationMatch) {
+        const input = parseAlarmActionRequest(await request.json());
+        const mapId = decodeURIComponent(mapPublicationMatch[1]);
+        const version = mapPublicationMatch[2] === "publish"
+          ? await this.core.publishMapVersion(mapId, input.operatorId)
+          : await this.core.retireMapVersion(mapId, input.operatorId);
+        return json({ version });
+      }
+
       const mapTopologyMatch = url.pathname.match(/^\/api\/v1\/maps\/([^/]+)\/topology$/);
       if (request.method === "GET" && mapTopologyMatch) {
         return json({ topology: await this.core.getMapTopology(decodeURIComponent(mapTopologyMatch[1])) });
@@ -73,6 +100,25 @@ export class FleetApi {
         const mapId = url.searchParams.get("mapId");
         if (!mapId) return json({ error: { code: "MAP_ID_REQUIRED", message: "The mapId query parameter is required." } }, 400);
         return json({ restrictions: await this.core.listTrafficRestrictions(mapId) });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/infrastructure/resources") {
+        const mapId = url.searchParams.get("mapId");
+        if (!mapId) return json({ error: { code: "MAP_ID_REQUIRED", message: "The mapId query parameter is required." } }, 400);
+        return json({ resources: await this.core.listInfrastructureResources(mapId) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/v1/infrastructure/resources") {
+        const input = parseCreateInfrastructureResourceRequest(await request.json());
+        return json({ resource: await this.core.createInfrastructureResource(input) }, 201);
+      }
+
+      const infrastructureStatusMatch = url.pathname.match(/^\/api\/v1\/infrastructure\/resources\/([^/]+)\/status$/);
+      if (request.method === "POST" && infrastructureStatusMatch) {
+        const input = parseUpdateInfrastructureResourceStatusRequest(await request.json());
+        return json({ resource: await this.core.updateInfrastructureResourceStatus(
+          decodeURIComponent(infrastructureStatusMatch[1]), input.status, input.reason, input.operatorId,
+        ) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/v1/traffic/restrictions") {

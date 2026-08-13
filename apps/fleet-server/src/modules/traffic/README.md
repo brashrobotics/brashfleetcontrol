@@ -25,6 +25,10 @@ Coordinates planned use of shared factory space and infrastructure resources.
   route, without pretending that an already-issued robot command was revoked.
 - Exposes closure create/list/clear controls through both `/api/v1` and the
   Fleet Management dashboard.
+- Reserves available door/elevator bindings as `INFRASTRUCTURE` resources in
+  the same conflict-free route transaction as edges and intersections.
+- Treats unavailable transit infrastructure as a dynamic routing exclusion and
+  alarms if an outage intersects a route already issued to a robot.
 
 The full-route policy is deliberately conservative: because a mission owns its
 complete path before dispatch, it cannot enter a hold-and-wait cycle with

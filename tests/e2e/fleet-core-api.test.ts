@@ -216,6 +216,69 @@ test("API creates, lists, and clears an operator traffic restriction", async () 
   }
 });
 
+test("API publishes map versions and manages factory infrastructure", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+  try {
+    const topology = await core.getMapTopology("plant-a@1");
+    const createMapResponse = await api.fetch(new Request("http://fleet.test/api/v1/map-versions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "api-plant",
+        displayName: "API Plant revision 1",
+        revision: 1,
+        nodes: topology.nodes,
+        edges: topology.edges,
+        operatorId: "map-api-engineer",
+      }),
+    }));
+    assert.equal(createMapResponse.status, 201);
+    const createdMap = await createMapResponse.json() as { version: { mapId: string; status: string } };
+    assert.equal(createdMap.version.status, "DRAFT");
+    const publishResponse = await api.fetch(new Request(
+      `http://fleet.test/api/v1/map-versions/${encodeURIComponent(createdMap.version.mapId)}/publish`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operatorId: "map-api-approver" }) },
+    ));
+    assert.equal(publishResponse.status, 200);
+
+    const createResourceResponse = await api.fetch(new Request("http://fleet.test/api/v1/infrastructure/resources", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        resourceId: "API-DOOR-01",
+        mapId: createdMap.version.mapId,
+        displayName: "API north door",
+        type: "DOOR",
+        reservationPolicy: "TRANSIT_EXCLUSIVE",
+        edgeId: topology.edges[0].edgeId,
+        operatorId: "facility-api-engineer",
+      }),
+    }));
+    assert.equal(createResourceResponse.status, 201);
+    const listResourceResponse = await api.fetch(new Request(
+      `http://fleet.test/api/v1/infrastructure/resources?mapId=${encodeURIComponent(createdMap.version.mapId)}`,
+    ));
+    const listed = await listResourceResponse.json() as { resources: Array<{ resourceId: string; status: string }> };
+    assert.deepEqual(listed.resources.map((resource) => resource.resourceId), ["API-DOOR-01"]);
+
+    const statusResponse = await api.fetch(new Request(
+      "http://fleet.test/api/v1/infrastructure/resources/API-DOOR-01/status",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "MAINTENANCE", reason: "API test", operatorId: "facility-api-engineer" }),
+      },
+    ));
+    assert.equal(statusResponse.status, 200);
+    const status = await statusResponse.json() as { resource: { status: string } };
+    assert.equal(status.resource.status, "MAINTENANCE");
+  } finally {
+    await core.stop();
+  }
+});
+
 test("API does not dispatch an external mission reference twice", async () => {
   const { core } = createTestFleetSystem();
   await core.start();

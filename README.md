@@ -337,6 +337,12 @@ critical alarm for explicit operator coordination. These controls are available
 from the local Fleet Management dashboard and the documented `/api/v1/traffic`
 endpoints.
 
+Factory topology is managed as immutable draft/published/retired revisions.
+Doors, elevators, chargers, docks, and workcells are first-class infrastructure
+resources; available transit equipment receives exclusive route reservations,
+while outages trigger rerouting and active-route alarms. The dashboard renders
+these resources and exposes maintenance/restore controls.
+
 Evaluate [Open-RMF](https://github.com/open-rmf/rmf) when orchestration includes doors, elevators, and heterogeneous fleets. A VDA 5050 adapter may be sufficient for a simpler project that only needs robot-to-fleet communication. Do not add both without a concrete requirement.
 
 Required traffic tests:

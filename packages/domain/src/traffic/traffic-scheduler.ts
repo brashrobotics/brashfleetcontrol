@@ -4,7 +4,13 @@ import { DomainError } from "../shared/domain-error.js";
 export type RoutePhase = "TO_PICKUP" | "TO_DROPOFF";
 export type TrafficPlanStatus = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
 export type TrafficReservationState = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
-export type TrafficResourceType = "EDGE" | "NODE";
+export type TrafficResourceType = "EDGE" | "NODE" | "INFRASTRUCTURE";
+
+export interface InfrastructureTrafficBinding {
+  resourceId: string;
+  edgeId: string | null;
+  nodeId: string | null;
+}
 
 export interface TrafficRouteSegment {
   sequence: number;
@@ -66,6 +72,7 @@ export interface ScheduleTrafficInput {
   plannedAt: Date;
   existingReservations: TrafficReservationSnapshot[];
   excludedResourceIds?: string[];
+  infrastructureBindings?: InfrastructureTrafficBinding[];
 }
 
 export interface TrafficSchedulerOptions {
@@ -124,7 +131,7 @@ export class TrafficScheduler {
 
     for (let iteration = 0; iteration < 10_000; iteration += 1) {
       segments = this.buildSegments(traversals, scheduledStartAt);
-      windows = this.buildReservationWindows(segments);
+      windows = this.buildReservationWindows(segments, input.infrastructureBindings ?? []);
       const requiredShift = this.requiredGlobalShift(windows, input.existingReservations);
       if (requiredShift === 0) break;
       scheduledStartAt = new Date(scheduledStartAt.getTime() + requiredShift);
@@ -193,7 +200,7 @@ export class TrafficScheduler {
     });
   }
 
-  private buildReservationWindows(segments: TrafficRouteSegment[]): ReservationWindow[] {
+  private buildReservationWindows(segments: TrafficRouteSegment[], infrastructureBindings: InfrastructureTrafficBinding[]): ReservationWindow[] {
     const raw: ReservationWindow[] = [];
     for (const segment of segments) {
       raw.push({
@@ -214,6 +221,32 @@ export class TrafficScheduler {
         startsAt: new Date(segment.exitAt.getTime() - this.clearanceMs),
         endsAt: new Date(segment.exitAt.getTime() + this.nodeHoldMs),
       });
+      for (const binding of infrastructureBindings) {
+        if (binding.edgeId === segment.edgeId) {
+          raw.push({
+            resourceId: `infrastructure:${binding.resourceId}`,
+            resourceType: "INFRASTRUCTURE",
+            startsAt: new Date(segment.enterAt.getTime() - this.clearanceMs),
+            endsAt: new Date(segment.exitAt.getTime() + this.clearanceMs),
+          });
+        }
+        if (binding.nodeId === segment.fromNodeId) {
+          raw.push({
+            resourceId: `infrastructure:${binding.resourceId}`,
+            resourceType: "INFRASTRUCTURE",
+            startsAt: new Date(segment.enterAt.getTime() - this.clearanceMs),
+            endsAt: new Date(segment.enterAt.getTime() + this.nodeHoldMs),
+          });
+        }
+        if (binding.nodeId === segment.toNodeId) {
+          raw.push({
+            resourceId: `infrastructure:${binding.resourceId}`,
+            resourceType: "INFRASTRUCTURE",
+            startsAt: new Date(segment.exitAt.getTime() - this.clearanceMs),
+            endsAt: new Date(segment.exitAt.getTime() + this.nodeHoldMs),
+          });
+        }
+      }
     }
     return mergeWindows(raw);
   }

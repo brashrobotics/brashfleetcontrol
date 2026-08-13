@@ -57,6 +57,28 @@ test("traffic scheduler shifts the whole route until every shared resource is co
   assertNoSharedResourceOverlap(first.reservations, second.reservations);
 });
 
+test("traffic scheduler reserves infrastructure bound to a traversed edge", () => {
+  const scheduler = new TrafficScheduler();
+  const now = new Date("2026-08-13T08:00:00.000Z");
+  const plan = scheduler.schedule({
+    routeId: "ROUTE-INFRASTRUCTURE",
+    missionId: "MISSION-INFRASTRUCTURE",
+    robotId: "ROBOT-INFRASTRUCTURE",
+    topology,
+    origin: { x: 0, y: 0 },
+    pickup: { stationId: "A", x: 0, y: 0 },
+    dropoff: { stationId: "B", x: 20, y: 0 },
+    requestedStartAt: now,
+    plannedAt: now,
+    existingReservations: [],
+    infrastructureBindings: [{ resourceId: "DOOR-X", edgeId: "XB", nodeId: null }],
+  });
+
+  const reservation = plan.reservations.find((entry) => entry.resourceId === "infrastructure:DOOR-X");
+  assert.equal(reservation?.resourceType, "INFRASTRUCTURE");
+  assert.ok(reservation && reservation.startsAt < plan.segments[1].exitAt);
+});
+
 function assertNoSharedResourceOverlap(
   first: TrafficReservationSnapshot[],
   second: TrafficReservationSnapshot[],

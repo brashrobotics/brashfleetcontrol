@@ -1,5 +1,6 @@
 import {
   FleetCore,
+  type InfrastructureResourceRecord,
   RandomIdGenerator,
   SystemClock,
   createDefaultPlantTopology,
@@ -12,6 +13,7 @@ import {
   InMemoryAssignmentDecisionRepository,
   InMemoryAlarmRepository,
   InMemoryCommandRepository,
+  InMemoryInfrastructureResourceRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
@@ -71,6 +73,7 @@ export function createDevelopmentAdapter(): SimulatorAdapter {
 export function createDevelopmentSystem() {
   const adapter = createDevelopmentAdapter();
   const topology = createDefaultPlantTopology();
+  const infrastructureResources = new InMemoryInfrastructureResourceRepository(defaultInfrastructureResources());
 
   const core = new FleetCore({
     alarms: new InMemoryAlarmRepository(),
@@ -81,6 +84,7 @@ export function createDevelopmentSystem() {
     decisions: new InMemoryAssignmentDecisionRepository(),
     events: new InMemoryMissionEventRepository(),
     maps: new InMemoryMapTopologyRepository([topology]),
+    infrastructureResources,
     traffic: new InMemoryTrafficPlanRepository(),
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     transactions: new InMemoryTransactionManager(),
@@ -94,4 +98,21 @@ export function createDevelopmentSystem() {
   });
 
   return { core, api: new FleetApi(core), adapter };
+}
+
+export function defaultInfrastructureResources(now = new Date()): InfrastructureResourceRecord[] {
+  return [
+    {
+      resourceId: "DOOR-CENTER-NORTH", mapId: "plant-a@1", displayName: "Central north door",
+      type: "DOOR", status: "AVAILABLE", reservationPolicy: "TRANSIT_EXCLUSIVE",
+      edgeId: "E-CENTER-NORTH", nodeId: null, createdBy: "system-bootstrap", createdAt: now,
+      updatedBy: "system-bootstrap", updatedAt: now, statusReason: null,
+    },
+    {
+      resourceId: "CHARGER-C-02", mapId: "plant-a@1", displayName: "Charger C-02",
+      type: "CHARGER", status: "AVAILABLE", reservationPolicy: "SERVICE_EXCLUSIVE",
+      edgeId: null, nodeId: "N-CHARGER-C-02", createdBy: "system-bootstrap", createdAt: now,
+      updatedBy: "system-bootstrap", updatedAt: now, statusReason: null,
+    },
+  ];
 }

@@ -4,6 +4,10 @@ import type {
   AlarmStatus,
   AssignmentDecision,
   CommandReceipt,
+  InfrastructureReservationPolicy,
+  InfrastructureResourceStatus,
+  InfrastructureResourceType,
+  MapVersionStatus,
   MissionCommand,
   MissionEventType,
   MissionEventView,
@@ -152,6 +156,52 @@ export interface MapTopologyRepository {
   getById(mapId: string, options?: RepositoryReadOptions): Promise<MapTopology | null>;
   list(): Promise<MapTopology[]>;
   save(topology: MapTopology): Promise<void>;
+  getVersion(mapId: string, options?: RepositoryReadOptions): Promise<MapVersionRecord | null>;
+  listVersions(familyId?: string): Promise<MapVersionRecord[]>;
+  createDraft(topology: MapTopology, familyId: string, operatorId: string, at: Date): Promise<MapVersionRecord>;
+  publish(mapId: string, operatorId: string, at: Date): Promise<MapVersionRecord | null>;
+  retire(mapId: string, operatorId: string, at: Date): Promise<MapVersionRecord | null>;
+}
+
+export interface MapVersionRecord {
+  topology: MapTopology;
+  familyId: string;
+  status: MapVersionStatus;
+  createdBy: string;
+  createdAt: Date;
+  publishedBy: string | null;
+  publishedAt: Date | null;
+  retiredBy: string | null;
+  retiredAt: Date | null;
+}
+
+export interface InfrastructureResourceRecord {
+  resourceId: string;
+  mapId: string;
+  displayName: string;
+  type: InfrastructureResourceType;
+  status: InfrastructureResourceStatus;
+  reservationPolicy: InfrastructureReservationPolicy;
+  edgeId: string | null;
+  nodeId: string | null;
+  createdBy: string;
+  createdAt: Date;
+  updatedBy: string;
+  updatedAt: Date;
+  statusReason: string | null;
+}
+
+export interface InfrastructureResourceRepository {
+  getById(resourceId: string, options?: RepositoryReadOptions): Promise<InfrastructureResourceRecord | null>;
+  listByMap(mapId: string): Promise<InfrastructureResourceRecord[]>;
+  create(resource: InfrastructureResourceRecord): Promise<InfrastructureResourceRecord>;
+  updateStatus(
+    resourceId: string,
+    status: InfrastructureResourceStatus,
+    reason: string,
+    operatorId: string,
+    at: Date,
+  ): Promise<InfrastructureResourceRecord | null>;
 }
 
 export interface TrafficPlanRepository {

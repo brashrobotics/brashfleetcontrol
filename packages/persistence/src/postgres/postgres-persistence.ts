@@ -5,6 +5,7 @@ import {
   PostgresAssignmentDecisionRepository,
   PostgresAlarmRepository,
   PostgresCommandRepository,
+  PostgresInfrastructureResourceRepository,
   PostgresMapTopologyRepository,
   PostgresMissionQueueRepository,
   PostgresMissionEventRepository,
@@ -25,6 +26,7 @@ export class PostgresPersistence {
   readonly decisions: PostgresAssignmentDecisionRepository;
   readonly events: PostgresMissionEventRepository;
   readonly maps: PostgresMapTopologyRepository;
+  readonly infrastructureResources: PostgresInfrastructureResourceRepository;
   readonly traffic: PostgresTrafficPlanRepository;
   readonly trafficRestrictions: PostgresTrafficRestrictionRepository;
   readonly transactions: PostgresTransactionManager;
@@ -41,6 +43,7 @@ export class PostgresPersistence {
     this.decisions = new PostgresAssignmentDecisionRepository(this.database);
     this.events = new PostgresMissionEventRepository(this.database);
     this.maps = new PostgresMapTopologyRepository(this.database);
+    this.infrastructureResources = new PostgresInfrastructureResourceRepository(this.database);
     this.traffic = new PostgresTrafficPlanRepository(this.database);
     this.trafficRestrictions = new PostgresTrafficRestrictionRepository(this.database);
     this.transactions = new PostgresTransactionManager(this.database);
