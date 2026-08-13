@@ -35,6 +35,7 @@ What works today:
 - Bearer-token authentication, role/site authorization, and fail-closed mutation auditing
 - Append-only PostgreSQL audit history with actor binding and correlation IDs
 - Prometheus metrics, redacted JSON logs, alert rules, and live operations analytics
+- Repeatable load, soak, chaos, restart, and PostgreSQL contention test gates
 
 What is not production-ready yet:
 
