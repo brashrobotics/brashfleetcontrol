@@ -42,7 +42,7 @@ test("map revisions move through draft, published, and retired without mutating 
   }
 });
 
-test("transit infrastructure is reserved, alarmed on outage, and excluded from new routes", async () => {
+test("transit infrastructure is reserved, dynamically bypassed on outage, and excluded from new routes", async () => {
   const system = createTestFleetSystem();
   await system.core.start();
   try {
@@ -66,7 +66,11 @@ test("transit infrastructure is reserved, alarmed on outage, and excluded from n
     await system.core.updateInfrastructureResourceStatus(
       "DOOR-CENTER-NORTH", "MAINTENANCE", "Fire door inspection", "facility-engineer",
     );
-    assert.ok((await system.core.getAlarms()).alarms.some((alarm) => alarm.code === "INFRASTRUCTURE_RESOURCE_UNAVAILABLE"));
+    const replacement = await system.core.getMissionRoute(mission.missionId);
+    assert.notEqual(replacement?.routeId, dispatched.route?.routeId);
+    assert.equal(replacement?.segments.some((segment) => segment.edgeId === "E-CENTER-NORTH"), false);
+    assert.equal((await system.core.listMissionRouteRevisions(mission.missionId)).length, 2);
+    assert.equal((await system.core.getAlarms()).alarms.some((alarm) => alarm.code === "INFRASTRUCTURE_RESOURCE_UNAVAILABLE"), false);
     await system.core.cancelMission(mission.missionId);
 
     const second = await system.core.createMission(transportMissionFixture({ externalReference: "DOOR-ROUTE-2" }));

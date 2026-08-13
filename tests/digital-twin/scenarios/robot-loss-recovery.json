@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "robot-loss-recovery",
+  "kind": "ROBOT_LOSS_RECOVERY",
+  "robotCount": 1,
+  "missionCount": 1,
+  "thresholds": {
+    "maximumReservationOverlaps": 0,
+    "maximumDuplicateCommandEvents": 0,
+    "minimumCriticalAlarms": 2,
+    "maximumCriticalAlarms": 2,
+    "minimumSafetyHolds": 1,
+    "minimumRecoveryRequiredMissions": 1
+  }
+}

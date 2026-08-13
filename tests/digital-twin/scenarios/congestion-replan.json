@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "congestion-replan",
+  "kind": "CONGESTION_REPLAN",
+  "robotCount": 1,
+  "missionCount": 1,
+  "thresholds": {
+    "maximumReservationOverlaps": 0,
+    "maximumDuplicateCommandEvents": 0,
+    "maximumCriticalAlarms": 0,
+    "minimumRouteRevisions": 2
+  }
+}

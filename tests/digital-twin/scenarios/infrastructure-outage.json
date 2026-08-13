@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "infrastructure-outage",
+  "kind": "INFRASTRUCTURE_OUTAGE",
+  "robotCount": 1,
+  "missionCount": 1,
+  "thresholds": {
+    "maximumReservationOverlaps": 0,
+    "maximumDuplicateCommandEvents": 0,
+    "maximumCriticalAlarms": 0,
+    "minimumRouteRevisions": 2
+  }
+}

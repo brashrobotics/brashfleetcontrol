@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "nominal-throughput",
+  "kind": "NOMINAL_THROUGHPUT",
+  "robotCount": 4,
+  "missionCount": 8,
+  "thresholds": {
+    "minimumCompletionRate": 1,
+    "maximumReservationOverlaps": 0,
+    "maximumDuplicateCommandEvents": 0,
+    "maximumCriticalAlarms": 0
+  }
+}

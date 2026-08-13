@@ -1286,6 +1286,19 @@ export class FleetCore {
       if (status === "AVAILABLE") {
         await this.dependencies.alarms.resolveByFingerprint(fingerprint, now);
       } else if (plan.status === "ACTIVE" && plan.reservations.some((reservation) => reservation.resourceId === `infrastructure:${resourceId}`)) {
+        try {
+          const mission = await this.requireMission(plan.missionId);
+          if (["ASSIGNED", "DISPATCHED"].includes(mission.state)) {
+            await this.replanMissionRoute(plan.missionId, {
+              reason: `Infrastructure ${resourceId} became ${status.toLowerCase()}: ${reason}`,
+              operatorId,
+              excludedResourceIds: [updated.edgeId ? `edge:${updated.edgeId}` : `node:${updated.nodeId}`],
+            });
+            continue;
+          }
+        } catch {
+          // An alarm is the fail-safe when the current mission cannot be rerouted.
+        }
         await this.dependencies.alarms.raise({
           fingerprint,
           code: "INFRASTRUCTURE_RESOURCE_UNAVAILABLE",
