@@ -10,6 +10,8 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
+import { SecuredFleetApi } from "../api/secured-fleet-api.js";
+import { createDevelopmentIdentityProvider } from "../modules/identity/access-control.js";
 import { createDevelopmentAdapter, defaultInfrastructureResources } from "./create-development-system.js";
 
 export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
@@ -47,7 +49,11 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       instanceId: `fleet-server-${randomUUID()}`,
     });
 
-    return { core, api: new FleetApi(core), adapter, persistence };
+    const api = new SecuredFleetApi(new FleetApi(core), {
+      identities: createDevelopmentIdentityProvider(),
+      audit: persistence.audit,
+    });
+    return { core, api, adapter, persistence };
   } catch (error) {
     await persistence.close();
     throw error;

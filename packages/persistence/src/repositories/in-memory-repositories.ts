@@ -1,5 +1,8 @@
 import type {
   AssignmentDecisionRepository,
+  AuditEventFilter,
+  AuditEventRecord,
+  AuditRepository,
   AlarmRecord,
   AlarmRepository,
   CommandClaimOptions,
@@ -838,6 +841,32 @@ export class InMemoryMissionEventRepository implements MissionEventRepository {
       .filter((event) => event.missionId === missionId)
       .map((event) => structuredClone(event));
   }
+}
+
+export class InMemoryAuditRepository implements AuditRepository {
+  private readonly events: AuditEventRecord[] = [];
+
+  async append(event: AuditEventRecord): Promise<void> {
+    if (this.events.some((candidate) => candidate.auditEventId === event.auditEventId)) {
+      throw new Error(`Audit event ${event.auditEventId} already exists.`);
+    }
+    this.events.push(cloneAuditEvent(event));
+  }
+
+  async list(filter: AuditEventFilter): Promise<AuditEventRecord[]> {
+    return this.events
+      .filter((event) => !filter.actorId || event.actorId === filter.actorId)
+      .filter((event) => !filter.targetType || event.targetType === filter.targetType)
+      .filter((event) => !filter.targetId || event.targetId === filter.targetId)
+      .filter((event) => !filter.correlationId || event.correlationId === filter.correlationId)
+      .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
+      .slice(0, filter.limit)
+      .map(cloneAuditEvent);
+  }
+}
+
+function cloneAuditEvent(event: AuditEventRecord): AuditEventRecord {
+  return { ...event, occurredAt: new Date(event.occurredAt), metadata: structuredClone(event.metadata) };
 }
 
 function cloneTrafficReservation(reservation: TrafficReservationSnapshot): TrafficReservationSnapshot {

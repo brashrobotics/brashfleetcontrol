@@ -1,4 +1,6 @@
 import type {
+  AuditOutcome,
+  FleetRole,
   AlarmSeverity,
   AlarmSourceType,
   AlarmStatus,
@@ -301,6 +303,36 @@ export interface NewMissionEvent {
 export interface MissionEventRepository {
   append(event: NewMissionEvent): Promise<void>;
   listByMission(missionId: string): Promise<MissionEventView[]>;
+}
+
+export interface AuditEventRecord {
+  auditEventId: string;
+  occurredAt: Date;
+  actorId: string;
+  actorDisplayName: string;
+  actorRole: FleetRole | null;
+  action: string;
+  targetType: string;
+  targetId: string;
+  outcome: AuditOutcome;
+  correlationId: string;
+  requestMethod: string;
+  requestPath: string;
+  siteId: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface AuditEventFilter {
+  limit: number;
+  actorId?: string;
+  targetType?: string;
+  targetId?: string;
+  correlationId?: string;
+}
+
+export interface AuditRepository {
+  append(event: AuditEventRecord): Promise<void>;
+  list(filter: AuditEventFilter): Promise<AuditEventRecord[]>;
 }
 
 export interface TransactionManager {

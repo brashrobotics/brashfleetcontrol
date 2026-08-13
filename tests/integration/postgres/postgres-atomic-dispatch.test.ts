@@ -185,6 +185,49 @@ test("concurrent PostgreSQL workflow workers lease one runnable step once", {
   }
 });
 
+test("PostgreSQL audit records are queryable and reject mutation", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  const auditEventId = `PG-AUDIT-${suffix}`;
+
+  try {
+    await persistence.audit.append({
+      auditEventId,
+      occurredAt: new Date(),
+      actorId: `operator-${suffix}`,
+      actorDisplayName: "PostgreSQL Test Operator",
+      actorRole: "OPERATOR",
+      action: "traffic.manage",
+      targetType: "TRAFFIC",
+      targetId: `edge-${suffix}`,
+      outcome: "SUCCEEDED",
+      correlationId: `correlation-${suffix}`,
+      requestMethod: "POST",
+      requestPath: "/api/v1/traffic/restrictions",
+      siteId: "plant-a",
+      metadata: { test: true },
+    });
+    const events = await persistence.audit.list({ limit: 10, correlationId: `correlation-${suffix}` });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].auditEventId, auditEventId);
+    assert.deepEqual(events[0].metadata, { test: true });
+
+    await assert.rejects(
+      persistence.database.query("UPDATE audit_events SET target_id = 'tampered' WHERE audit_event_id = $1", [auditEventId]),
+      /append-only/,
+    );
+    await assert.rejects(
+      persistence.database.query("DELETE FROM audit_events WHERE audit_event_id = $1", [auditEventId]),
+      /append-only/,
+    );
+  } finally {
+    await persistence.close();
+  }
+});
+
 test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap", {
   skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
 }, async () => {

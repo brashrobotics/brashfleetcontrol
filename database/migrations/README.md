@@ -78,6 +78,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - Retry, timeout, wait, mission-correlation, and worker-lease fields.
 - Exclusive service-resource reservations protected by a PostgreSQL overlap constraint.
 
+`011_identity_and_audit.sql` adds:
+
+- Append-only security and operator audit events with correlation IDs.
+- Actor, role, action, target, outcome, site, and request context indexes.
+- Database triggers that reject audit event updates and deletes.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

@@ -11,6 +11,7 @@ import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } f
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
   InMemoryAssignmentDecisionRepository,
+  InMemoryAuditRepository,
   InMemoryAlarmRepository,
   InMemoryCommandRepository,
   InMemoryInfrastructureResourceRepository,
@@ -26,6 +27,8 @@ import {
   InMemoryWorkflowResourceReservationRepository,
 } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
+import { SecuredFleetApi } from "../api/secured-fleet-api.js";
+import { createDevelopmentIdentityProvider } from "../modules/identity/access-control.js";
 
 function simulatorRobot(input: {
   robotId: string;
@@ -101,7 +104,12 @@ export function createDevelopmentSystem() {
     instanceId: "fleet-server-memory",
   });
 
-  return { core, api: new FleetApi(core), adapter };
+  const audit = new InMemoryAuditRepository();
+  const api = new SecuredFleetApi(new FleetApi(core), {
+    identities: createDevelopmentIdentityProvider(),
+    audit,
+  });
+  return { core, api, adapter, audit };
 }
 
 export function defaultInfrastructureResources(now = new Date()): InfrastructureResourceRecord[] {

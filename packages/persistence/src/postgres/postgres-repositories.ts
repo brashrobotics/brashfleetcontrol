@@ -2,6 +2,9 @@ import type {
   AlarmRecord,
   AlarmRepository,
   AssignmentDecisionRepository,
+  AuditEventFilter,
+  AuditEventRecord,
+  AuditRepository,
   CommandClaimOptions,
   CommandRepository,
   InfrastructureResourceRecord,
@@ -34,11 +37,13 @@ import type {
   AlarmSourceType,
   AlarmStatus,
   AssignmentDecision,
+  AuditOutcome,
   CommandReceipt,
   InfrastructureResourceStatus,
   MissionCommand,
   MissionEventType,
   MissionEventView,
+  FleetRole,
   WorkflowStepDefinition,
 } from "@brash/contracts";
 import {
@@ -126,6 +131,23 @@ interface MissionQueueRow {
   last_error: string | null;
   lease_owner: string | null;
   lease_expires_at: Date | null;
+}
+
+interface AuditEventRow {
+  audit_event_id: string;
+  occurred_at: Date;
+  actor_id: string;
+  actor_display_name: string;
+  actor_role: FleetRole | null;
+  action: string;
+  target_type: string;
+  target_id: string;
+  outcome: AuditOutcome;
+  correlation_id: string;
+  request_method: string;
+  request_path: string;
+  site_id: string | null;
+  metadata: Record<string, unknown>;
 }
 
 interface AlarmRow {
@@ -486,6 +508,35 @@ export class PostgresMissionQueueRepository implements MissionQueueRepository {
           updated_at = $3
       WHERE mission_id = $1 AND status = 'PENDING'
     `, [missionId, outcome, completedAt]);
+  }
+}
+
+export class PostgresAuditRepository implements AuditRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async append(event: AuditEventRecord): Promise<void> {
+    await this.database.query(`
+      INSERT INTO audit_events (
+        audit_event_id, occurred_at, actor_id, actor_display_name, actor_role,
+        action, target_type, target_id, outcome, correlation_id,
+        request_method, request_path, site_id, metadata
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
+    `, [event.auditEventId, event.occurredAt, event.actorId, event.actorDisplayName, event.actorRole,
+      event.action, event.targetType, event.targetId, event.outcome, event.correlationId,
+      event.requestMethod, event.requestPath, event.siteId, JSON.stringify(event.metadata)]);
+  }
+
+  async list(filter: AuditEventFilter): Promise<AuditEventRecord[]> {
+    const result = await this.database.query<AuditEventRow>(`
+      SELECT * FROM audit_events
+      WHERE ($2::text IS NULL OR actor_id = $2)
+        AND ($3::text IS NULL OR target_type = $3)
+        AND ($4::text IS NULL OR target_id = $4)
+        AND ($5::text IS NULL OR correlation_id = $5)
+      ORDER BY occurred_at DESC, audit_event_id DESC
+      LIMIT $1
+    `, [filter.limit, filter.actorId ?? null, filter.targetType ?? null, filter.targetId ?? null, filter.correlationId ?? null]);
+    return result.rows.map(auditEventFromRow);
   }
 }
 
@@ -1331,6 +1382,25 @@ function missionQueueFromRow(row: MissionQueueRow): MissionQueueEntry {
     lastError: row.last_error,
     leaseOwner: row.lease_owner,
     leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
+  };
+}
+
+function auditEventFromRow(row: AuditEventRow): AuditEventRecord {
+  return {
+    auditEventId: row.audit_event_id,
+    occurredAt: new Date(row.occurred_at),
+    actorId: row.actor_id,
+    actorDisplayName: row.actor_display_name,
+    actorRole: row.actor_role,
+    action: row.action,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    outcome: row.outcome,
+    correlationId: row.correlation_id,
+    requestMethod: row.request_method,
+    requestPath: row.request_path,
+    siteId: row.site_id,
+    metadata: structuredClone(row.metadata),
   };
 }
 

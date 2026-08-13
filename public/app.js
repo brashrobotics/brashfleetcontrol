@@ -61,7 +61,15 @@ let timelineMissionId = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const fleetApiToken = sessionStorage.getItem("brashFleetApiToken") || "brash-dev-operator";
 const statusLabels = { moving: "ON MISSION", idle: "IDLE", charging: "CHARGING", blocked: "NEEDS ATTENTION", stopped: "OFFLINE" };
+
+function fleetFetch(path, options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set("authorization", `Bearer ${fleetApiToken}`);
+  headers.set("x-fleet-site", "plant-a");
+  return fetch(path, { ...options, headers });
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
@@ -489,7 +497,7 @@ async function showMissionTimeline(missionId) {
   $("#timeline-list").innerHTML = '<p class="timeline-empty">Loading mission events…</p>';
   if (!dialog.open) dialog.showModal();
   try {
-    const response = await fetch(`/api/v1/missions/${encodeURIComponent(missionId)}/events`, { cache: "no-store" });
+    const response = await fleetFetch(`/api/v1/missions/${encodeURIComponent(missionId)}/events`, { cache: "no-store" });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Mission timeline unavailable");
     $("#timeline-list").innerHTML = result.events.map((event) => `
@@ -549,19 +557,19 @@ function renderAll() {
 }
 
 async function refreshCoreSnapshot() {
-  const response = await fetch("/api/v1/fleet/snapshot", { cache: "no-store" });
+  const response = await fleetFetch("/api/v1/fleet/snapshot", { cache: "no-store" });
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
   const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse, workflowResponse] = await Promise.all([
-    fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
-    fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
-    fetch(`/api/v1/traffic/restrictions?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
-    fetch(`/api/v1/infrastructure/resources?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
-    fetch("/api/v1/recovery/status", { cache: "no-store" }),
-    fetch("/api/v1/dispatch/queue", { cache: "no-store" }),
-    fetch("/api/v1/alarms", { cache: "no-store" }),
-    fetch("/api/v1/workflows", { cache: "no-store" }),
+    fleetFetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
+    fleetFetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
+    fleetFetch(`/api/v1/traffic/restrictions?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
+    fleetFetch(`/api/v1/infrastructure/resources?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
+    fleetFetch("/api/v1/recovery/status", { cache: "no-store" }),
+    fleetFetch("/api/v1/dispatch/queue", { cache: "no-store" }),
+    fleetFetch("/api/v1/alarms", { cache: "no-store" }),
+    fleetFetch("/api/v1/workflows", { cache: "no-store" }),
   ]);
   if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok || !workflowResponse.ok) throw new Error("Fleet coordination state unavailable");
   const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }, { workflows }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json(), workflowResponse.json()]);
@@ -571,7 +579,7 @@ async function refreshCoreSnapshot() {
 
 async function connectFleet() {
   try {
-    const health = await fetch("/api/v1/health", { cache: "no-store" });
+    const health = await fleetFetch("/api/v1/health", { cache: "no-store" });
     if (health.ok) {
       fleetMode = "core";
       await refreshCoreSnapshot();
@@ -595,7 +603,7 @@ async function connectFleet() {
 }
 
 async function post(path, payload) {
-  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: payload ? JSON.stringify(payload) : undefined });
+  const response = await fleetFetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: payload ? JSON.stringify(payload) : undefined });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error?.message || result.error || "The operation could not be completed");
   return result;

@@ -141,6 +141,48 @@ export interface WorkflowView {
   steps: WorkflowStepView[];
 }
 
+export type FleetRole = "VIEWER" | "OPERATOR" | "DISPATCHER" | "FLEET_ADMIN" | "INTEGRATION";
+export type FleetPermission =
+  | "fleet:read"
+  | "mission:create"
+  | "mission:dispatch"
+  | "mission:cancel"
+  | "workflow:create"
+  | "workflow:cancel"
+  | "alarm:acknowledge"
+  | "traffic:manage"
+  | "map:manage"
+  | "resource:manage"
+  | "audit:read";
+
+export interface IdentityView {
+  subjectId: string;
+  displayName: string;
+  subjectType: "USER" | "SERVICE";
+  role: FleetRole;
+  permissions: FleetPermission[];
+  siteIds: string[];
+}
+
+export type AuditOutcome = "ATTEMPTED" | "SUCCEEDED" | "DENIED" | "FAILED";
+
+export interface AuditEventView {
+  auditEventId: string;
+  occurredAt: string;
+  actorId: string;
+  actorDisplayName: string;
+  actorRole: FleetRole | null;
+  action: string;
+  targetType: string;
+  targetId: string;
+  outcome: AuditOutcome;
+  correlationId: string;
+  requestMethod: string;
+  requestPath: string;
+  siteId: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface RobotView extends RobotDescriptor {
   state: RobotStateSnapshot;
 }

@@ -1,14 +1,17 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.10.0
-  description: Vendor-independent missions, durable multi-step workflows, immutable map versions, infrastructure resources, traffic coordination, alarms, recovery, and operator control API.
+  version: 0.11.0
+  description: Authenticated, role-authorized vendor-independent missions, workflows, infrastructure, traffic, alarms, and append-only audit API.
 servers:
   - url: http://127.0.0.1:4273
+security:
+  - bearerAuth: []
 paths:
   /api/v1/health:
     get:
       operationId: getHealth
+      security: []
       responses:
         "200":
           description: Fleet Core health summary
@@ -32,6 +35,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FleetSnapshot"
+  /api/v1/identity/me:
+    get:
+      operationId: getCurrentIdentity
+      responses:
+        "200":
+          description: Authenticated Fleet API identity and effective permissions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identity]
+                properties:
+                  identity: { $ref: "#/components/schemas/Identity" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/audit/events:
+    get:
+      operationId: listAuditEvents
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: actorId, in: query, schema: { type: string } }
+        - { name: targetType, in: query, schema: { type: string } }
+        - { name: targetId, in: query, schema: { type: string } }
+        - { name: correlationId, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Append-only security and operator audit history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEvent" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/v1/dispatch/queue:
     get:
       operationId: getDispatchQueue
@@ -554,6 +595,11 @@ paths:
                       - { $ref: "#/components/schemas/TrafficPlan" }
                       - { type: "null" }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Fleet API token
   parameters:
     MissionId:
       name: missionId
@@ -581,7 +627,51 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Unauthorized:
+      description: Missing or invalid bearer token
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: Authenticated identity lacks the required permission or site scope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
   schemas:
+    Identity:
+      type: object
+      required: [subjectId, displayName, subjectType, role, permissions, siteIds]
+      properties:
+        subjectId: { type: string }
+        displayName: { type: string }
+        subjectType: { type: string, enum: [USER, SERVICE] }
+        role: { type: string, enum: [VIEWER, OPERATOR, DISPATCHER, FLEET_ADMIN, INTEGRATION] }
+        permissions:
+          type: array
+          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, audit:read] }
+        siteIds:
+          type: array
+          items: { type: string }
+    AuditEvent:
+      type: object
+      required: [auditEventId, occurredAt, actorId, actorDisplayName, actorRole, action, targetType, targetId, outcome, correlationId, requestMethod, requestPath, siteId, metadata]
+      properties:
+        auditEventId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actorId: { type: string }
+        actorDisplayName: { type: string }
+        actorRole: { type: [string, "null"], enum: [VIEWER, OPERATOR, DISPATCHER, FLEET_ADMIN, INTEGRATION, null] }
+        action: { type: string }
+        targetType: { type: string }
+        targetId: { type: string }
+        outcome: { type: string, enum: [ATTEMPTED, SUCCEEDED, DENIED, FAILED] }
+        correlationId: { type: string }
+        requestMethod: { type: string }
+        requestPath: { type: string }
+        siteId: { type: [string, "null"] }
+        metadata: { type: object, additionalProperties: true }
     Location:
       type: object
       additionalProperties: false

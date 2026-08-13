@@ -32,13 +32,14 @@ What works today:
 - Persistent, deduplicated alarms with severity, acknowledgement, and automatic resolution
 - Durable DAG workflows with transport, wait, charge, inspect, and dock steps
 - Per-step timeout/retry, multi-instance leases, and exclusive service-resource reservations
+- Bearer-token authentication, role/site authorization, and fail-closed mutation auditing
+- Append-only PostgreSQL audit history with actor binding and correlation IDs
 
 What is not production-ready yet:
 
 - Motor, safety PLC, and sensor integrations
 - Real localization and navigation
 - Priority preemption, automatic cancellation retry, and dynamic obstacle replanning
-- Authentication and role-based authorization
 - Device certificates, signed OTA updates, and rollback
 - Production observability and black-box recording
 - Conformity assessment and on-site safety validation

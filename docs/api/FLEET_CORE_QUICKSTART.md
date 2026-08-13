@@ -27,6 +27,19 @@ Open `http://127.0.0.1:4273` in a browser to view the Fleet Management screen.
 It reads Fleet Core data from the same server. The health endpoint remains at
 `/api/v1/health`.
 
+All other `/api/v1` endpoints require a bearer token. The browser dashboard uses
+the local-only `brash-dev-operator` identity. For terminal requests:
+
+```bash
+export FLEET_TOKEN=brash-dev-admin
+curl -H "authorization: Bearer $FLEET_TOKEN" \
+  -H "x-fleet-site: plant-a" \
+  http://127.0.0.1:4273/api/v1/identity/me
+```
+
+Set `FLEET_API_TOKENS` to a JSON array of identities to replace the development
+tokens. `NODE_ENV=production` fails startup if that configuration is absent.
+
 ## Start Fleet Core with PostgreSQL
 
 Start PostgreSQL and copy the documented development configuration:
@@ -62,6 +75,8 @@ PostgreSQL persists:
 - Robot heartbeat timestamps, recovery state, and renewable route leases.
 - Priority-aged dispatch queue attempts, retry times, errors, and worker leases.
 - Operational alarms, occurrence counters, acknowledgement records, and resolution history.
+- Workflow instances, step attempts, leases, and exclusive service-resource reservations.
+- Append-only authenticated API audit attempts and outcomes.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
