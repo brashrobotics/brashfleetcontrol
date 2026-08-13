@@ -8,6 +8,7 @@ import { OutboxRetryWorker } from "./workers/outbox-retry-worker.js";
 import { FleetRecoveryWorker } from "./workers/fleet-recovery-worker.js";
 import { MissionDispatchWorker } from "./workers/mission-dispatch-worker.js";
 import { WorkflowWorker } from "./workers/workflow-worker.js";
+import { WorkOrderWorker } from "./workers/work-order-worker.js";
 
 const persistenceConfig = loadPersistenceConfig();
 const postgresSystem = persistenceConfig.mode === "postgres"
@@ -28,6 +29,8 @@ const dispatchWorker = new MissionDispatchWorker(core, { onError: workerError("m
 dispatchWorker.start();
 const workflowWorker = new WorkflowWorker(core, { onError: workerError("workflow") });
 workflowWorker.start();
+const workOrderWorker = new WorkOrderWorker(core, { onError: workerError("work_order") });
+workOrderWorker.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
 const server = createServer(async (incoming, outgoing) => {
@@ -58,6 +61,7 @@ async function shutdown(): Promise<void> {
   recoveryWorker.stop();
   dispatchWorker.stop();
   workflowWorker.stop();
+  workOrderWorker.stop();
   await core.stop();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());

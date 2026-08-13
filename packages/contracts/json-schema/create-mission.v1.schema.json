@@ -25,6 +25,7 @@
     "payloadKg": { "type": "number", "minimum": 0 },
     "pickup": { "$ref": "#/$defs/location" },
     "dropoff": { "$ref": "#/$defs/location" },
+    "preferredRobotId": { "type": "string", "minLength": 1 },
     "autoDispatch": { "type": "boolean" }
   },
   "$defs": {

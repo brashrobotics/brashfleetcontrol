@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.12.0
+  version: 0.13.0
   description: Authenticated, role-authorized vendor-independent missions, workflows, infrastructure, traffic, alarms, and append-only audit API.
 servers:
   - url: http://127.0.0.1:4273
@@ -501,6 +501,72 @@ paths:
                   workflow: { $ref: "#/components/schemas/Workflow" }
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/work-orders:
+    get:
+      operationId: listWorkOrders
+      responses:
+        "200":
+          description: High-level factory work orders and allocation decisions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workOrders]
+                properties:
+                  workOrders:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkOrder" }
+    post:
+      operationId: createWorkOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateWorkOrderRequest" }
+      responses:
+        "201":
+          description: Work order persisted and evaluated for robot allocation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workOrder]
+                properties:
+                  workOrder: { $ref: "#/components/schemas/WorkOrder" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/work-orders/{workOrderId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkOrderId"
+    get:
+      operationId: getWorkOrder
+      responses:
+        "200":
+          description: Work order with explainable candidates and workflow correlation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workOrder]
+                properties:
+                  workOrder: { $ref: "#/components/schemas/WorkOrder" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/work-orders/{workOrderId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/WorkOrderId"
+    post:
+      operationId: cancelWorkOrder
+      responses:
+        "200":
+          description: Work order and compiled workflow cancellation state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workOrder]
+                properties:
+                  workOrder: { $ref: "#/components/schemas/WorkOrder" }
   /api/v1/missions:
     post:
       operationId: createMission
@@ -640,6 +706,11 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1 }
+    WorkOrderId:
+      name: workOrderId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
   responses:
     BadRequest:
       description: Invalid request
@@ -674,7 +745,7 @@ components:
         role: { type: string, enum: [VIEWER, OPERATOR, DISPATCHER, FLEET_ADMIN, INTEGRATION] }
         permissions:
           type: array
-          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, observability:read, audit:read] }
+          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, orchestrator:submit, orchestrator:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, observability:read, audit:read] }
         siteIds:
           type: array
           items: { type: string }
@@ -698,7 +769,7 @@ components:
         metadata: { type: object, additionalProperties: true }
     OperationalAnalytics:
       type: object
-      required: [generatedAt, robots, missions, workflows, traffic, alarms]
+      required: [generatedAt, robots, missions, workflows, workOrders, traffic, alarms]
       properties:
         generatedAt: { type: string, format: date-time }
         robots:
@@ -732,6 +803,16 @@ components:
             succeeded: { type: integer }
             failed: { type: integer }
             retryCount: { type: integer }
+        workOrders:
+          type: object
+          required: [total, pending, allocated, running, succeeded, failed]
+          properties:
+            total: { type: integer }
+            pending: { type: integer }
+            allocated: { type: integer }
+            running: { type: integer }
+            succeeded: { type: integer }
+            failed: { type: integer }
         traffic:
           type: object
           required: [activeRoutes, activeReservations, delayedRoutes, scheduledWaitSeconds]
@@ -774,7 +855,85 @@ components:
         payloadKg: { type: number, minimum: 0 }
         pickup: { $ref: "#/components/schemas/Location" }
         dropoff: { $ref: "#/components/schemas/Location" }
+        preferredRobotId: { type: string, minLength: 1 }
         autoDispatch: { type: boolean, default: true }
+    WorkOrderFollowUpAction:
+      type: object
+      additionalProperties: false
+      required: [actionId, name, type, durationSeconds]
+      properties:
+        actionId: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        type: { type: string, enum: [WAIT, CHARGE, INSPECT, DOCK] }
+        durationSeconds: { type: integer, minimum: 1 }
+        resourceId: { type: string, minLength: 1 }
+      allOf:
+        - if:
+            properties: { type: { const: WAIT } }
+          then:
+            not: { required: [resourceId] }
+          else:
+            required: [resourceId]
+    CreateWorkOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [name, priority, requiredCapabilities, payloadKg, pickup, dropoff]
+      properties:
+        name: { type: string, minLength: 1 }
+        externalReference: { type: string, minLength: 1 }
+        priority: { type: number, minimum: 0, maximum: 100 }
+        requiredCapabilities:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        payloadKg: { type: number, minimum: 0 }
+        pickup: { $ref: "#/components/schemas/Location" }
+        dropoff: { $ref: "#/components/schemas/Location" }
+        followUpActions:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/WorkOrderFollowUpAction" }
+    OrchestratorCandidate:
+      type: object
+      required: [robotId, eligible, score, reasons]
+      properties:
+        robotId: { type: string }
+        eligible: { type: boolean }
+        score: { type: [number, "null"] }
+        reasons:
+          type: array
+          items: { type: string }
+    WorkOrder:
+      type: object
+      additionalProperties: false
+      required: [workOrderId, name, externalReference, priority, requiredCapabilities, payloadKg, pickup, dropoff, status, selectedRobotId, workflowId, allocationAttemptCount, nextAttemptAt, failureReason, candidates, createdAt, updatedAt, completedAt]
+      properties:
+        workOrderId: { type: string }
+        name: { type: string }
+        externalReference: { type: [string, "null"] }
+        priority: { type: number, minimum: 0, maximum: 100 }
+        requiredCapabilities:
+          type: array
+          items: { type: string }
+        payloadKg: { type: number, minimum: 0 }
+        pickup: { $ref: "#/components/schemas/Location" }
+        dropoff: { $ref: "#/components/schemas/Location" }
+        followUpActions:
+          type: array
+          items: { $ref: "#/components/schemas/WorkOrderFollowUpAction" }
+        status: { type: string, enum: [PENDING, ALLOCATED, RUNNING, CANCELLING, SUCCEEDED, FAILED, CANCELLED] }
+        selectedRobotId: { type: [string, "null"] }
+        workflowId: { type: [string, "null"] }
+        allocationAttemptCount: { type: integer, minimum: 0 }
+        nextAttemptAt: { type: string, format: date-time }
+        failureReason: { type: [string, "null"] }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/OrchestratorCandidate" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
     WorkflowStepDefinition:
       type: object
       additionalProperties: false
@@ -857,6 +1016,7 @@ components:
         missionId: { type: string }
         type: { const: TRANSPORT }
         externalReference: { type: string }
+        preferredRobotId: { type: string }
         priority: { type: number }
         requiredCapabilities:
           type: array

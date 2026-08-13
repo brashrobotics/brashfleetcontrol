@@ -413,3 +413,56 @@ test("API validates, exposes, and cancels durable workflows", async () => {
     await core.stop();
   }
 });
+
+test("API submits, explains, lists, and cancels orchestrated work orders", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+  try {
+    const invalid = await api.fetch(new Request("http://fleet.test/api/v1/work-orders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Invalid work order",
+        priority: 50,
+        requiredCapabilities: ["pallet_transport"],
+        payloadKg: 10,
+        pickup: { stationId: "WAREHOUSE-A", mapId: "plant-a@1", x: 10, y: 5 },
+        dropoff: { stationId: "QUALITY", mapId: "plant-a@1", x: 73, y: 74 },
+        followUpActions: [{ actionId: "inspect", name: "Inspect", type: "INSPECT", durationSeconds: 10 }],
+      }),
+    }));
+    assert.equal(invalid.status, 400);
+
+    const response = await api.fetch(new Request("http://fleet.test/api/v1/work-orders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "API orchestrated transport",
+        externalReference: "ERP-API-WORK-1",
+        priority: 85,
+        requiredCapabilities: ["pallet_transport"],
+        payloadKg: 200,
+        pickup: { stationId: "WAREHOUSE-A", mapId: "plant-a@1", x: 10, y: 5, zoneId: "warehouse" },
+        dropoff: { stationId: "ASSEMBLY-02", mapId: "plant-a@1", x: 70, y: 25, zoneId: "production" },
+      }),
+    }));
+    assert.equal(response.status, 201);
+    const body = await response.json() as { workOrder: { workOrderId: string; workflowId: string; selectedRobotId: string; candidates: unknown[] } };
+    assert.ok(body.workOrder.workflowId);
+    assert.ok(body.workOrder.selectedRobotId);
+    assert.ok(body.workOrder.candidates.length >= 1);
+
+    const fetched = await api.fetch(new Request(`http://fleet.test/api/v1/work-orders/${body.workOrder.workOrderId}`));
+    assert.equal(fetched.status, 200);
+    const listed = await api.fetch(new Request("http://fleet.test/api/v1/work-orders"));
+    const listBody = await listed.json() as { workOrders: Array<{ workOrderId: string }> };
+    assert.deepEqual(listBody.workOrders.map((workOrder) => workOrder.workOrderId), [body.workOrder.workOrderId]);
+
+    const cancelled = await api.fetch(new Request(`http://fleet.test/api/v1/work-orders/${body.workOrder.workOrderId}/cancel`, { method: "POST" }));
+    const cancelledBody = await cancelled.json() as { workOrder: { status: string } };
+    assert.equal(cancelledBody.workOrder.status, "CANCELLED");
+  } finally {
+    await core.stop();
+  }
+});

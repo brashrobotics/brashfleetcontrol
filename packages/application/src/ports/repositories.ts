@@ -4,6 +4,7 @@ import type {
   AlarmSeverity,
   AlarmSourceType,
   AlarmStatus,
+  CreateWorkOrderRequest,
   AssignmentDecision,
   CommandReceipt,
   InfrastructureReservationPolicy,
@@ -16,6 +17,8 @@ import type {
   MissionState,
   TrafficRestrictionStatus,
   WorkflowStatus,
+  WorkOrderStatus,
+  OrchestratorCandidateView,
   WorkflowStepDefinition,
   WorkflowStepStatus,
 } from "@brash/contracts";
@@ -98,6 +101,39 @@ export interface WorkflowResourceReservationRepository {
   getActiveByStep(workflowId: string, stepId: string): Promise<WorkflowResourceReservationRecord | null>;
   tryReserve(reservation: WorkflowResourceReservationRecord): Promise<WorkflowResourceReservationRecord | null>;
   release(reservationId: string, at: Date): Promise<WorkflowResourceReservationRecord | null>;
+}
+
+export interface WorkOrderRecord {
+  workOrderId: string;
+  request: CreateWorkOrderRequest;
+  status: WorkOrderStatus;
+  selectedRobotId: string | null;
+  workflowId: string | null;
+  candidates: OrchestratorCandidateView[];
+  allocationAttemptCount: number;
+  nextAttemptAt: Date;
+  lastAttemptAt: Date | null;
+  failureReason: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}
+
+export interface WorkOrderClaimOptions {
+  workerId: string;
+  claimedAt: Date;
+  leaseDurationMs: number;
+}
+
+export interface WorkOrderRepository {
+  findByExternalReference(externalReference: string): Promise<WorkOrderRecord | null>;
+  getById(workOrderId: string): Promise<WorkOrderRecord | null>;
+  list(): Promise<WorkOrderRecord[]>;
+  create(workOrder: WorkOrderRecord): Promise<void>;
+  save(workOrder: WorkOrderRecord): Promise<void>;
+  claimPending(limit: number, options: WorkOrderClaimOptions): Promise<WorkOrderRecord[]>;
 }
 
 export type MissionQueueOutcome = "DISPATCHED" | "CANCELLED";

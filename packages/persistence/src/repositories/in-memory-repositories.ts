@@ -31,6 +31,9 @@ import type {
   WorkflowResourceReservationRecord,
   WorkflowResourceReservationRepository,
   WorkflowStepRecord,
+  WorkOrderClaimOptions,
+  WorkOrderRecord,
+  WorkOrderRepository,
 } from "@brash/application";
 import type {
   AlarmStatus,
@@ -663,6 +666,50 @@ export class InMemoryWorkflowResourceReservationRepository implements WorkflowRe
   }
 }
 
+export class InMemoryWorkOrderRepository implements WorkOrderRepository {
+  private readonly workOrders = new Map<string, WorkOrderRecord>();
+
+  async findByExternalReference(externalReference: string): Promise<WorkOrderRecord | null> {
+    const record = [...this.workOrders.values()].find((candidate) => candidate.request.externalReference === externalReference);
+    return record ? cloneWorkOrder(record) : null;
+  }
+
+  async getById(workOrderId: string): Promise<WorkOrderRecord | null> {
+    const record = this.workOrders.get(workOrderId);
+    return record ? cloneWorkOrder(record) : null;
+  }
+
+  async list(): Promise<WorkOrderRecord[]> {
+    return [...this.workOrders.values()].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()).map(cloneWorkOrder);
+  }
+
+  async create(workOrder: WorkOrderRecord): Promise<void> {
+    if (this.workOrders.has(workOrder.workOrderId)) throw new Error(`Work order ${workOrder.workOrderId} already exists.`);
+    if (workOrder.request.externalReference && [...this.workOrders.values()].some((candidate) => candidate.request.externalReference === workOrder.request.externalReference)) {
+      throw new Error(`Work order external reference ${workOrder.request.externalReference} already exists.`);
+    }
+    this.workOrders.set(workOrder.workOrderId, cloneWorkOrder(workOrder));
+  }
+
+  async save(workOrder: WorkOrderRecord): Promise<void> {
+    this.workOrders.set(workOrder.workOrderId, cloneWorkOrder(workOrder));
+  }
+
+  async claimPending(limit: number, options: WorkOrderClaimOptions): Promise<WorkOrderRecord[]> {
+    const records = [...this.workOrders.values()].filter((record) => record.status === "PENDING"
+      && record.nextAttemptAt.getTime() <= options.claimedAt.getTime()
+      && (!record.leaseExpiresAt || record.leaseExpiresAt.getTime() <= options.claimedAt.getTime()))
+      .sort((left, right) => right.request.priority - left.request.priority
+        || left.nextAttemptAt.getTime() - right.nextAttemptAt.getTime()
+        || left.workOrderId.localeCompare(right.workOrderId)).slice(0, limit);
+    for (const record of records) {
+      record.leaseOwner = options.workerId;
+      record.leaseExpiresAt = new Date(options.claimedAt.getTime() + options.leaseDurationMs);
+    }
+    return records.map(cloneWorkOrder);
+  }
+}
+
 function cloneMapVersion(record: MapVersionRecord): MapVersionRecord {
   return {
     ...record,
@@ -867,6 +914,20 @@ export class InMemoryAuditRepository implements AuditRepository {
 
 function cloneAuditEvent(event: AuditEventRecord): AuditEventRecord {
   return { ...event, occurredAt: new Date(event.occurredAt), metadata: structuredClone(event.metadata) };
+}
+
+function cloneWorkOrder(record: WorkOrderRecord): WorkOrderRecord {
+  return {
+    ...record,
+    request: structuredClone(record.request),
+    candidates: structuredClone(record.candidates),
+    nextAttemptAt: new Date(record.nextAttemptAt),
+    lastAttemptAt: record.lastAttemptAt ? new Date(record.lastAttemptAt) : null,
+    leaseExpiresAt: record.leaseExpiresAt ? new Date(record.leaseExpiresAt) : null,
+    createdAt: new Date(record.createdAt),
+    updatedAt: new Date(record.updatedAt),
+    completedAt: record.completedAt ? new Date(record.completedAt) : null,
+  };
 }
 
 function cloneTrafficReservation(reservation: TrafficReservationSnapshot): TrafficReservationSnapshot {

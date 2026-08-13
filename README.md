@@ -36,12 +36,15 @@ What works today:
 - Append-only PostgreSQL audit history with actor binding and correlation IDs
 - Prometheus metrics, redacted JSON logs, alert rules, and live operations analytics
 - Repeatable load, soak, chaos, restart, and PostgreSQL contention test gates
+- Durable ERP/WMS work orders with capability-aware, explainable robot allocation
+- Automatic work-order retry, workflow compilation, robot substitution, and controlled cancellation
 
 What is not production-ready yet:
 
 - Motor, safety PLC, and sensor integrations
 - Real localization and navigation
 - Priority preemption, automatic cancellation retry, and dynamic obstacle replanning
+- Cost-, deadline-, shift-, and predicted-maintenance-aware global optimization
 - Device certificates, signed OTA updates, and rollback
 - Distributed tracing and robot black-box recording
 - Conformity assessment and on-site safety validation

@@ -75,7 +75,8 @@ export class WeightedDispatchPolicy {
       mission.pickup.y - robot.pose.y,
     );
     const batteryPenalty = (100 - robot.batteryPercent) * this.batteryPenaltyWeight;
-    const score = Number((distance * this.distanceWeight + batteryPenalty).toFixed(3));
+    const preferenceBonus = mission.preferredRobotId === robot.robotId ? -100_000 : 0;
+    const score = Number((distance * this.distanceWeight + batteryPenalty + preferenceBonus).toFixed(3));
 
     return {
       robotId: robot.robotId,
@@ -86,8 +87,8 @@ export class WeightedDispatchPolicy {
         `Payload capacity ${robot.maxPayloadKg} kg satisfies ${mission.payloadKg} kg.`,
         `Pickup distance is ${distance.toFixed(2)} map units.`,
         `Battery is ${robot.batteryPercent}%.`,
+        ...(mission.preferredRobotId === robot.robotId ? ["Selected by the upper-level work-order orchestrator."] : []),
       ],
     };
   }
 }
-

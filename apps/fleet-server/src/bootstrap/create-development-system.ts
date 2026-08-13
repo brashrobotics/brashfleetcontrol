@@ -5,6 +5,7 @@ import {
   SystemClock,
   createDefaultPlantTopology,
   WeightedDispatchPolicy,
+  WorkOrderAllocationPolicy,
 } from "@brash/application";
 import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } from "@brash/contracts";
@@ -26,6 +27,7 @@ import {
   InMemoryTrafficRestrictionRepository,
   InMemoryWorkflowRepository,
   InMemoryWorkflowResourceReservationRepository,
+  InMemoryWorkOrderRepository,
 } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
 import { SecuredFleetApi } from "../api/secured-fleet-api.js";
@@ -95,12 +97,14 @@ export function createDevelopmentSystem() {
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     workflows: new InMemoryWorkflowRepository(),
     workflowResourceReservations: new InMemoryWorkflowResourceReservationRepository(),
+    workOrders: new InMemoryWorkOrderRepository(),
     transactions: new InMemoryTransactionManager(),
     clock: new SystemClock(),
     ids: new RandomIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "fleet-server-memory",
   });

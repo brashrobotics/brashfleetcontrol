@@ -60,6 +60,7 @@ export interface CreateMissionRequest {
   payloadKg: number;
   pickup: MissionLocation;
   dropoff: MissionLocation;
+  preferredRobotId?: string;
   autoDispatch?: boolean;
 }
 
@@ -79,6 +80,7 @@ export interface MissionView {
   missionId: string;
   type: "TRANSPORT";
   externalReference?: string;
+  preferredRobotId?: string;
   priority: number;
   requiredCapabilities: string[];
   payloadKg: number;
@@ -141,6 +143,50 @@ export interface WorkflowView {
   steps: WorkflowStepView[];
 }
 
+export type WorkOrderStatus = "PENDING" | "ALLOCATED" | "RUNNING" | "CANCELLING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+export type WorkOrderFollowUpType = "WAIT" | "CHARGE" | "INSPECT" | "DOCK";
+
+export interface WorkOrderFollowUpAction {
+  actionId: string;
+  name: string;
+  type: WorkOrderFollowUpType;
+  durationSeconds: number;
+  resourceId?: string;
+}
+
+export interface CreateWorkOrderRequest {
+  name: string;
+  externalReference?: string;
+  priority: number;
+  requiredCapabilities: string[];
+  payloadKg: number;
+  pickup: MissionLocation;
+  dropoff: MissionLocation;
+  followUpActions?: WorkOrderFollowUpAction[];
+}
+
+export interface OrchestratorCandidateView {
+  robotId: string;
+  eligible: boolean;
+  score: number | null;
+  reasons: string[];
+}
+
+export interface WorkOrderView extends Omit<CreateWorkOrderRequest, "externalReference"> {
+  workOrderId: string;
+  externalReference: string | null;
+  status: WorkOrderStatus;
+  selectedRobotId: string | null;
+  workflowId: string | null;
+  allocationAttemptCount: number;
+  nextAttemptAt: string;
+  failureReason: string | null;
+  candidates: OrchestratorCandidateView[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
 export type FleetRole = "VIEWER" | "OPERATOR" | "DISPATCHER" | "FLEET_ADMIN" | "INTEGRATION";
 export type FleetPermission =
   | "fleet:read"
@@ -149,6 +195,8 @@ export type FleetPermission =
   | "mission:cancel"
   | "workflow:create"
   | "workflow:cancel"
+  | "orchestrator:submit"
+  | "orchestrator:cancel"
   | "alarm:acknowledge"
   | "traffic:manage"
   | "map:manage"
@@ -210,6 +258,14 @@ export interface OperationalAnalyticsView {
     succeeded: number;
     failed: number;
     retryCount: number;
+  };
+  workOrders: {
+    total: number;
+    pending: number;
+    allocated: number;
+    running: number;
+    succeeded: number;
+    failed: number;
   };
   traffic: {
     activeRoutes: number;

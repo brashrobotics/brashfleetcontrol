@@ -8,6 +8,7 @@ import {
   type CreateMapVersionRequest,
   type CreateMissionRequest,
   type CreateWorkflowRequest,
+  type CreateWorkOrderRequest,
   type DispatchQueueView,
   type DispatchResult,
   type FleetRecoveryStatusView,
@@ -27,6 +28,7 @@ import {
   type TrafficRestrictionView,
   type TrafficScheduleView,
   type WorkflowView,
+  type WorkOrderView,
 } from "@brash/contracts";
 import {
   DomainError,
@@ -71,8 +73,11 @@ import type {
   WorkflowRepository,
   WorkflowResourceReservationRepository,
   WorkflowStepRecord,
+  WorkOrderRecord,
+  WorkOrderRepository,
 } from "./ports/repositories.js";
 import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
+import { WorkOrderAllocationPolicy } from "./policies/work-order-allocation-policy.js";
 
 export interface FleetCoreDependencies {
   alarms: AlarmRepository;
@@ -88,12 +93,14 @@ export interface FleetCoreDependencies {
   trafficRestrictions: TrafficRestrictionRepository;
   workflows: WorkflowRepository;
   workflowResourceReservations: WorkflowResourceReservationRepository;
+  workOrders: WorkOrderRepository;
   transactions: TransactionManager;
   clock: Clock;
   ids: IdGenerator;
   adapter: RobotAdapter;
   dispatchPolicy: WeightedDispatchPolicy;
   trafficScheduler: TrafficScheduler;
+  workOrderAllocationPolicy: WorkOrderAllocationPolicy;
   livenessPolicy: RobotLivenessPolicy;
   instanceId: string;
 }
@@ -107,6 +114,9 @@ export interface FleetRecoveryOptions {
   dispatchRetryMaxMs?: number;
   workflowLeaseMs?: number;
   workflowPollMs?: number;
+  workOrderLeaseMs?: number;
+  workOrderRetryBaseMs?: number;
+  workOrderRetryMaxMs?: number;
 }
 
 interface AssignmentPreparation {
@@ -136,6 +146,9 @@ export class FleetCore {
   private readonly dispatchRetryMaxMs: number;
   private readonly workflowLeaseMs: number;
   private readonly workflowPollMs: number;
+  private readonly workOrderLeaseMs: number;
+  private readonly workOrderRetryBaseMs: number;
+  private readonly workOrderRetryMaxMs: number;
   private readonly managedRobotIds = new Set<string>();
   private unsubscribe: Unsubscribe | null = null;
   private started = false;
@@ -150,6 +163,9 @@ export class FleetCore {
     this.dispatchRetryMaxMs = recoveryOptions.dispatchRetryMaxMs ?? 60_000;
     this.workflowLeaseMs = recoveryOptions.workflowLeaseMs ?? 30_000;
     this.workflowPollMs = recoveryOptions.workflowPollMs ?? 1_000;
+    this.workOrderLeaseMs = recoveryOptions.workOrderLeaseMs ?? 30_000;
+    this.workOrderRetryBaseMs = recoveryOptions.workOrderRetryBaseMs ?? 1_000;
+    this.workOrderRetryMaxMs = recoveryOptions.workOrderRetryMaxMs ?? 60_000;
   }
 
   async start(): Promise<void> {
@@ -243,6 +259,7 @@ export class FleetCore {
       const mission = Mission.create({
         missionId: this.dependencies.ids.next("mission"),
         externalReference: request.externalReference,
+        preferredRobotId: request.preferredRobotId,
         priority: request.priority,
         requiredCapabilities: [...request.requiredCapabilities],
         payloadKg: request.payloadKg,
@@ -672,6 +689,90 @@ export class FleetCore {
     return this.getWorkflow(workflowId);
   }
 
+  async createWorkOrder(request: CreateWorkOrderRequest): Promise<WorkOrderView> {
+    this.assertStarted();
+    if (request.externalReference) {
+      const existing = await this.dependencies.workOrders.findByExternalReference(request.externalReference);
+      if (existing) return this.getWorkOrder(existing.workOrderId);
+    }
+    await this.requirePublishedMap(request.pickup.mapId, true);
+    const now = this.dependencies.clock.now();
+    const record: WorkOrderRecord = {
+      workOrderId: this.dependencies.ids.next("workOrder"),
+      request: structuredClone(request),
+      status: "PENDING",
+      selectedRobotId: null,
+      workflowId: null,
+      candidates: [],
+      allocationAttemptCount: 0,
+      nextAttemptAt: now,
+      lastAttemptAt: null,
+      failureReason: null,
+      leaseOwner: this.dependencies.instanceId,
+      leaseExpiresAt: new Date(now.getTime() + this.workOrderLeaseMs),
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    };
+    try {
+      await this.dependencies.workOrders.create(record);
+    } catch (error) {
+      if (request.externalReference) {
+        const existing = await this.dependencies.workOrders.findByExternalReference(request.externalReference);
+        if (existing) return this.getWorkOrder(existing.workOrderId);
+      }
+      throw error;
+    }
+    await this.allocateWorkOrder(record);
+    return this.getWorkOrder(record.workOrderId);
+  }
+
+  async getWorkOrder(workOrderId: string): Promise<WorkOrderView> {
+    const record = await this.dependencies.workOrders.getById(workOrderId);
+    if (!record) throw new DomainError("WORK_ORDER_NOT_FOUND", `Work order ${workOrderId} was not found.`);
+    await this.synchronizeWorkOrder(record);
+    return this.workOrderToView(record);
+  }
+
+  async listWorkOrders(): Promise<WorkOrderView[]> {
+    const records = await this.dependencies.workOrders.list();
+    for (const record of records) await this.synchronizeWorkOrder(record);
+    return records.map((record) => this.workOrderToView(record));
+  }
+
+  async processWorkOrderQueue(limit = 10): Promise<number> {
+    this.assertStarted();
+    const now = this.dependencies.clock.now();
+    const claimed = await this.dependencies.workOrders.claimPending(limit, {
+      workerId: this.dependencies.instanceId,
+      claimedAt: now,
+      leaseDurationMs: this.workOrderLeaseMs,
+    });
+    for (const record of claimed) await this.allocateWorkOrder(record);
+    return claimed.length;
+  }
+
+  async cancelWorkOrder(workOrderId: string): Promise<WorkOrderView> {
+    const record = await this.dependencies.workOrders.getById(workOrderId);
+    if (!record) throw new DomainError("WORK_ORDER_NOT_FOUND", `Work order ${workOrderId} was not found.`);
+    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(record.status)) return this.workOrderToView(record);
+    const now = this.dependencies.clock.now();
+    if (record.workflowId) {
+      const workflow = await this.cancelWorkflow(record.workflowId);
+      record.status = workflow.status === "CANCELLED" ? "CANCELLED" : "CANCELLING";
+      record.completedAt = workflow.status === "CANCELLED" ? now : null;
+    } else {
+      record.status = "CANCELLED";
+      record.completedAt = now;
+    }
+    record.updatedAt = now;
+    record.failureReason = null;
+    record.leaseOwner = null;
+    record.leaseExpiresAt = null;
+    await this.dependencies.workOrders.save(record);
+    return this.workOrderToView(record);
+  }
+
   async getMissionEvents(missionId: string): Promise<MissionEventView[]> {
     await this.requireMission(missionId);
     return this.dependencies.events.listByMission(missionId);
@@ -1094,9 +1195,10 @@ export class FleetCore {
   }
 
   async getOperationalAnalytics(): Promise<OperationalAnalyticsView> {
-    const [snapshot, workflows, alarms, queue] = await Promise.all([
+    const [snapshot, workflows, workOrders, alarms, queue] = await Promise.all([
       this.getSnapshot(),
       this.listWorkflows(),
+      this.listWorkOrders(),
       this.getAlarms(),
       this.getDispatchQueue(),
     ]);
@@ -1135,6 +1237,14 @@ export class FleetCore {
         succeeded: workflows.filter((workflow) => workflow.status === "SUCCEEDED").length,
         failed: workflows.filter((workflow) => workflow.status === "FAILED").length,
         retryCount: workflows.flatMap((workflow) => workflow.steps).reduce((sum, step) => sum + Math.max(0, step.attemptCount - 1), 0),
+      },
+      workOrders: {
+        total: workOrders.length,
+        pending: workOrders.filter((workOrder) => workOrder.status === "PENDING").length,
+        allocated: workOrders.filter((workOrder) => workOrder.status === "ALLOCATED").length,
+        running: workOrders.filter((workOrder) => ["RUNNING", "CANCELLING"].includes(workOrder.status)).length,
+        succeeded: workOrders.filter((workOrder) => workOrder.status === "SUCCEEDED").length,
+        failed: workOrders.filter((workOrder) => workOrder.status === "FAILED").length,
       },
       traffic: {
         activeRoutes: activePlans.length,
@@ -1572,6 +1682,153 @@ export class FleetCore {
     };
   }
 
+  private async allocateWorkOrder(record: WorkOrderRecord): Promise<void> {
+    if (record.status !== "PENDING") return;
+    const now = this.dependencies.clock.now();
+    const snapshot = await this.getSnapshot();
+    const decision = this.dependencies.workOrderAllocationPolicy.select(record.request, snapshot.robots);
+    record.allocationAttemptCount += 1;
+    record.lastAttemptAt = now;
+    record.candidates = structuredClone(decision.candidates);
+    record.leaseOwner = null;
+    record.leaseExpiresAt = null;
+    record.updatedAt = now;
+    if (!decision.selectedRobotId) {
+      record.selectedRobotId = null;
+      record.failureReason = decision.reasons.join(" ");
+      const retryMs = Math.min(this.workOrderRetryMaxMs, this.workOrderRetryBaseMs * (2 ** Math.min(10, record.allocationAttemptCount - 1)));
+      record.nextAttemptAt = new Date(now.getTime() + retryMs);
+      await this.dependencies.workOrders.save(record);
+      return;
+    }
+
+    try {
+      const workflow = await this.createWorkflow(await this.compileWorkOrderWorkflow(record, decision.selectedRobotId));
+      record.selectedRobotId = decision.selectedRobotId;
+      record.workflowId = workflow.workflowId;
+      record.status = "ALLOCATED";
+      record.nextAttemptAt = now;
+      record.failureReason = null;
+      await this.dependencies.workOrders.save(record);
+    } catch (error) {
+      record.status = "FAILED";
+      record.completedAt = now;
+      record.failureReason = error instanceof Error ? error.message : "Work-order workflow compilation failed.";
+      await this.dependencies.workOrders.save(record);
+    }
+  }
+
+  private async compileWorkOrderWorkflow(record: WorkOrderRecord, selectedRobotId: string): Promise<CreateWorkflowRequest> {
+    const request = record.request;
+    const steps: CreateWorkflowRequest["steps"] = [{
+      stepId: "transport",
+      name: "Transport material",
+      type: "TRANSPORT",
+      dependsOn: [],
+      timeoutSeconds: 1_800,
+      maxAttempts: 3,
+      retryDelaySeconds: 15,
+      mission: {
+        type: "TRANSPORT",
+        externalReference: `work-order:${record.workOrderId}:transport`,
+        preferredRobotId: selectedRobotId,
+        priority: request.priority,
+        requiredCapabilities: [...request.requiredCapabilities],
+        payloadKg: request.payloadKg,
+        pickup: { ...request.pickup },
+        dropoff: { ...request.dropoff },
+        autoDispatch: false,
+      },
+    }];
+    let previousStepId = "transport";
+    let currentLocation = { ...request.dropoff };
+    for (const action of request.followUpActions ?? []) {
+      const stepId = `follow-${action.actionId}`;
+      if (action.type === "WAIT") {
+        steps.push({
+          stepId,
+          name: action.name,
+          type: "WAIT",
+          dependsOn: [previousStepId],
+          timeoutSeconds: Math.max(60, action.durationSeconds + 30),
+          maxAttempts: 2,
+          retryDelaySeconds: 5,
+          durationSeconds: action.durationSeconds,
+        });
+      } else {
+        const resource = await this.dependencies.infrastructureResources.getById(action.resourceId!);
+        if (!resource) throw new DomainError("WORK_ORDER_RESOURCE_NOT_FOUND", `Resource ${action.resourceId} was not found.`);
+        if (resource.mapId !== currentLocation.mapId) throw new DomainError("WORK_ORDER_RESOURCE_MAP_MISMATCH", `Resource ${resource.resourceId} belongs to ${resource.mapId}.`);
+        const expectedType = ({ CHARGE: "CHARGER", INSPECT: "WORKCELL", DOCK: "DOCK" } as const)[action.type];
+        if (resource.type !== expectedType || resource.reservationPolicy !== "SERVICE_EXCLUSIVE") {
+          throw new DomainError("WORK_ORDER_RESOURCE_TYPE_INVALID", `${action.type} requires a SERVICE_EXCLUSIVE ${expectedType}.`);
+        }
+        const topology = await this.requirePublishedMap(resource.mapId, true);
+        const topologySnapshot = topology.snapshot();
+        const nodeId = resource.nodeId ?? topologySnapshot.edges.find((edge) => edge.edgeId === resource.edgeId)?.fromNodeId;
+        if (!nodeId) throw new DomainError("WORK_ORDER_RESOURCE_BINDING_INVALID", `Resource ${resource.resourceId} has no usable topology binding.`);
+        const node = topology.getNode(nodeId);
+        const resourceLocation = { stationId: node.stationId ?? resource.resourceId, mapId: resource.mapId, x: node.x, y: node.y };
+        steps.push({
+          stepId,
+          name: action.name,
+          type: action.type,
+          dependsOn: [previousStepId],
+          timeoutSeconds: Math.max(600, action.durationSeconds + 300),
+          maxAttempts: 3,
+          retryDelaySeconds: 15,
+          resourceId: resource.resourceId,
+          durationSeconds: action.durationSeconds,
+          mission: {
+            type: "TRANSPORT",
+            externalReference: `work-order:${record.workOrderId}:${action.actionId}`,
+            preferredRobotId: selectedRobotId,
+            priority: request.priority,
+            requiredCapabilities: [...request.requiredCapabilities],
+            payloadKg: request.payloadKg,
+            pickup: { ...currentLocation },
+            dropoff: resourceLocation,
+            autoDispatch: false,
+          },
+        });
+        currentLocation = resourceLocation;
+      }
+      previousStepId = stepId;
+    }
+    return { name: request.name, externalReference: `work-order:${record.workOrderId}`, steps };
+  }
+
+  private async synchronizeWorkOrder(record: WorkOrderRecord): Promise<void> {
+    if (!record.workflowId || ["PENDING", "SUCCEEDED", "FAILED", "CANCELLED"].includes(record.status)) return;
+    const workflow = await this.getWorkflow(record.workflowId);
+    const nextStatus = ({ PENDING: "ALLOCATED", RUNNING: "RUNNING", CANCELLING: "CANCELLING", SUCCEEDED: "SUCCEEDED", FAILED: "FAILED", CANCELLED: "CANCELLED" } as const)[workflow.status];
+    if (record.status === nextStatus && record.failureReason === workflow.failureReason) return;
+    const now = this.dependencies.clock.now();
+    record.status = nextStatus;
+    record.updatedAt = now;
+    record.failureReason = workflow.failureReason;
+    record.completedAt = ["SUCCEEDED", "FAILED", "CANCELLED"].includes(nextStatus) ? now : null;
+    await this.dependencies.workOrders.save(record);
+  }
+
+  private workOrderToView(record: WorkOrderRecord): WorkOrderView {
+    return {
+      ...structuredClone(record.request),
+      workOrderId: record.workOrderId,
+      externalReference: record.request.externalReference ?? null,
+      status: record.status,
+      selectedRobotId: record.selectedRobotId,
+      workflowId: record.workflowId,
+      allocationAttemptCount: record.allocationAttemptCount,
+      nextAttemptAt: record.nextAttemptAt.toISOString(),
+      failureReason: record.failureReason,
+      candidates: structuredClone(record.candidates),
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
+      completedAt: record.completedAt?.toISOString() ?? null,
+    };
+  }
+
   private async getTrafficControls(mapId: string): Promise<{
     excludedResourceIds: string[];
     infrastructureBindings: Array<{ resourceId: string; edgeId: string | null; nodeId: string | null }>;
@@ -1658,8 +1915,11 @@ export class FleetCore {
       }
 
       if (!step.missionId) {
+        const workOrder = await this.getWorkOrderForWorkflow(aggregate.workflow);
+        const missionDefinition = structuredClone(step.definition.mission!);
+        if (workOrder?.selectedRobotId) missionDefinition.preferredRobotId = workOrder.selectedRobotId;
         const mission = await this.createMission({
-          ...structuredClone(step.definition.mission!),
+          ...missionDefinition,
           externalReference: `workflow:${step.workflowId}:${step.definition.stepId}:attempt:${step.attemptCount}`,
           autoDispatch: false,
         });
@@ -1677,6 +1937,9 @@ export class FleetCore {
           if (!(error instanceof DomainError) || error.code !== "MISSION_NOT_QUEUED") throw error;
           mission = await this.getMission(step.missionId);
         }
+      }
+      if (mission.assignedRobotId) {
+        await this.synchronizeWorkOrderRobot(aggregate.workflow, mission.assignedRobotId, now);
       }
 
       if (mission.state === "COMPLETED") {
@@ -1704,6 +1967,19 @@ export class FleetCore {
         now,
       );
     }
+  }
+
+  private async getWorkOrderForWorkflow(workflow: WorkflowRecord): Promise<WorkOrderRecord | null> {
+    const workOrderId = workflow.externalReference?.match(/^work-order:(.+)$/)?.[1];
+    return workOrderId ? this.dependencies.workOrders.getById(workOrderId) : null;
+  }
+
+  private async synchronizeWorkOrderRobot(workflow: WorkflowRecord, robotId: string, now: Date): Promise<void> {
+    const workOrder = await this.getWorkOrderForWorkflow(workflow);
+    if (!workOrder || workOrder.selectedRobotId === robotId || ["SUCCEEDED", "FAILED", "CANCELLED"].includes(workOrder.status)) return;
+    workOrder.selectedRobotId = robotId;
+    workOrder.updatedAt = now;
+    await this.dependencies.workOrders.save(workOrder);
   }
 
   private async ensureWorkflowResource(step: WorkflowStepRecord, now: Date): Promise<void> {

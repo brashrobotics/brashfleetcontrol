@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology } from "@brash/application";
+import { FleetCore, WeightedDispatchPolicy, WorkOrderAllocationPolicy, createDefaultPlantTopology } from "@brash/application";
 import type { MissionCommand } from "@brash/contracts";
 import type { RobotAdapter } from "@brash/robot-adapter-sdk";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
@@ -20,6 +20,7 @@ import {
   InMemoryTrafficRestrictionRepository,
   InMemoryWorkflowRepository,
   InMemoryWorkflowResourceReservationRepository,
+  InMemoryWorkOrderRepository,
 } from "@brash/persistence";
 import {
   ManualClock,
@@ -77,12 +78,14 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     workflows: new InMemoryWorkflowRepository(),
     workflowResourceReservations: new InMemoryWorkflowResourceReservationRepository(),
+    workOrders: new InMemoryWorkOrderRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "recovery-test",
   };
@@ -124,6 +127,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     workflows: new InMemoryWorkflowRepository(),
     workflowResourceReservations: new InMemoryWorkflowResourceReservationRepository(),
+    workOrders: new InMemoryWorkOrderRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
@@ -132,6 +136,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
     ], { now: () => clock.now() })),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "outbox-worker-test",
   };
@@ -175,11 +180,13 @@ test("startup reconciliation does not overwrite a durable reservation with stale
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     workflows: new InMemoryWorkflowRepository(),
     workflowResourceReservations: new InMemoryWorkflowResourceReservationRepository(),
+    workOrders: new InMemoryWorkOrderRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "reconciliation-test",
   };

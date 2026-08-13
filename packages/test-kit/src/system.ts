@@ -1,4 +1,4 @@
-import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology, type FleetRecoveryOptions } from "@brash/application";
+import { FleetCore, WeightedDispatchPolicy, WorkOrderAllocationPolicy, createDefaultPlantTopology, type FleetRecoveryOptions } from "@brash/application";
 import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import type { SimulatorRobotDefinition } from "@brash/simulator-adapter";
@@ -17,6 +17,7 @@ import {
   InMemoryTrafficRestrictionRepository,
   InMemoryWorkflowRepository,
   InMemoryWorkflowResourceReservationRepository,
+  InMemoryWorkOrderRepository,
 } from "@brash/persistence";
 import { ManualClock, SequentialIdGenerator } from "./fakes.js";
 import { robotFixture } from "./fixtures.js";
@@ -64,6 +65,7 @@ export function createTestFleetSystem(options: {
   const trafficRestrictions = new InMemoryTrafficRestrictionRepository();
   const workflows = new InMemoryWorkflowRepository();
   const workflowResourceReservations = new InMemoryWorkflowResourceReservationRepository();
+  const workOrders = new InMemoryWorkOrderRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     alarms,
@@ -79,15 +81,17 @@ export function createTestFleetSystem(options: {
     trafficRestrictions,
     workflows,
     workflowResourceReservations,
+    workOrders,
     transactions,
     clock,
     ids,
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "test-fleet-core",
   }, options.coreOptions);
 
-  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, decisions, events, maps, infrastructureResources, traffic, trafficRestrictions, workflows, workflowResourceReservations, transactions };
+  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, decisions, events, maps, infrastructureResources, traffic, trafficRestrictions, workflows, workflowResourceReservations, workOrders, transactions };
 }

@@ -20,6 +20,7 @@ export function missionToView(mission: Mission): MissionView {
     missionId: snapshot.missionId,
     type: "TRANSPORT",
     externalReference: snapshot.externalReference,
+    preferredRobotId: snapshot.preferredRobotId,
     priority: snapshot.priority,
     requiredCapabilities: [...snapshot.requiredCapabilities],
     payloadKg: snapshot.payloadKg,

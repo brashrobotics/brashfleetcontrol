@@ -46,6 +46,33 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
     assert.equal(denied.status, 403);
     assert.equal((await core.getSnapshot()).missions.length, 0);
 
+    const transport = transportMissionFixture({ externalReference: "SEC-WORK-ORDER" });
+    const workOrderRequest = {
+      name: "Authenticated factory order",
+      externalReference: transport.externalReference,
+      priority: transport.priority,
+      requiredCapabilities: transport.requiredCapabilities,
+      payloadKg: transport.payloadKg,
+      pickup: transport.pickup,
+      dropoff: transport.dropoff,
+    };
+    const viewerWorkOrder = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/work-orders", VIEWER_TOKEN, {
+      method: "POST",
+      body: JSON.stringify(workOrderRequest),
+    }));
+    assert.equal(viewerWorkOrder.status, 403);
+
+    const orchestratorCorrelationId = "security-orchestrator-correlation";
+    const acceptedWorkOrder = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/work-orders", OPERATOR_TOKEN, {
+      method: "POST",
+      headers: { "x-correlation-id": orchestratorCorrelationId },
+      body: JSON.stringify(workOrderRequest),
+    }));
+    assert.equal(acceptedWorkOrder.status, 201);
+    const orchestratorAudit = await audit.list({ limit: 10, actorId: "operator-1", correlationId: orchestratorCorrelationId });
+    assert.deepEqual(orchestratorAudit.map((event) => event.outcome).sort(), ["ATTEMPTED", "SUCCEEDED"]);
+    assert.ok(orchestratorAudit.every((event) => event.action === "work_order.submit"));
+
     const correlationId = "security-test-correlation";
     const restricted = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/traffic/restrictions", OPERATOR_TOKEN, {
       method: "POST",
@@ -75,8 +102,9 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
     assert.ok(body.events.every((event) => event.action === "traffic.manage" && event.correlationId === correlationId));
 
     const deniedEvents = await audit.list({ limit: 10, actorId: "viewer-1" });
-    assert.equal(deniedEvents.length, 1);
-    assert.equal(deniedEvents[0].outcome, "DENIED");
+    assert.equal(deniedEvents.length, 2);
+    assert.ok(deniedEvents.every((event) => event.outcome === "DENIED"));
+    assert.deepEqual(deniedEvents.map((event) => event.action).sort(), ["mission.create", "work_order.submit"]);
 
     const viewerMetrics = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/metrics", VIEWER_TOKEN));
     assert.equal(viewerMetrics.status, 403);

@@ -16,6 +16,7 @@ import {
   PostgresTrafficRestrictionRepository,
   PostgresWorkflowRepository,
   PostgresWorkflowResourceReservationRepository,
+  PostgresWorkOrderRepository,
 } from "./postgres-repositories.js";
 import { PostgresTransactionManager } from "./postgres-transaction-manager.js";
 
@@ -35,6 +36,7 @@ export class PostgresPersistence {
   readonly trafficRestrictions: PostgresTrafficRestrictionRepository;
   readonly workflows: PostgresWorkflowRepository;
   readonly workflowResourceReservations: PostgresWorkflowResourceReservationRepository;
+  readonly workOrders: PostgresWorkOrderRepository;
   readonly transactions: PostgresTransactionManager;
   private readonly startupTimeoutMs: number;
 
@@ -55,6 +57,7 @@ export class PostgresPersistence {
     this.trafficRestrictions = new PostgresTrafficRestrictionRepository(this.database);
     this.workflows = new PostgresWorkflowRepository(this.database);
     this.workflowResourceReservations = new PostgresWorkflowResourceReservationRepository(this.database);
+    this.workOrders = new PostgresWorkOrderRepository(this.database);
     this.transactions = new PostgresTransactionManager(this.database);
   }
 

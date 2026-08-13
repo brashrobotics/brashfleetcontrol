@@ -23,6 +23,7 @@ export interface MissionLocation {
 export interface CreateMissionProps {
   missionId: string;
   externalReference?: string;
+  preferredRobotId?: string;
   priority: number;
   requiredCapabilities: string[];
   payloadKg: number;
@@ -50,6 +51,7 @@ export class Mission {
   readonly missionId: string;
   readonly type = "TRANSPORT" as const;
   readonly externalReference?: string;
+  readonly preferredRobotId?: string;
   readonly priority: number;
   readonly requiredCapabilities: readonly string[];
   readonly payloadKg: number;
@@ -68,6 +70,7 @@ export class Mission {
   private constructor(props: CreateMissionProps) {
     this.missionId = props.missionId;
     this.externalReference = props.externalReference;
+    this.preferredRobotId = props.preferredRobotId;
     this.priority = props.priority;
     this.requiredCapabilities = Object.freeze([...new Set(props.requiredCapabilities)]);
     this.payloadKg = props.payloadKg;
@@ -96,6 +99,7 @@ export class Mission {
     const mission = Mission.create({
       missionId: snapshot.missionId,
       externalReference: snapshot.externalReference,
+      preferredRobotId: snapshot.preferredRobotId,
       priority: snapshot.priority,
       requiredCapabilities: [...snapshot.requiredCapabilities],
       payloadKg: snapshot.payloadKg,
@@ -250,6 +254,7 @@ export class Mission {
     return {
       missionId: this.missionId,
       externalReference: this.externalReference,
+      preferredRobotId: this.preferredRobotId,
       priority: this.priority,
       requiredCapabilities: [...this.requiredCapabilities],
       payloadKg: this.payloadKg,

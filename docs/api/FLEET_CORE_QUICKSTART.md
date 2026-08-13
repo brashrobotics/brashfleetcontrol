@@ -77,6 +77,7 @@ PostgreSQL persists:
 - Operational alarms, occurrence counters, acknowledgement records, and resolution history.
 - Workflow instances, step attempts, leases, and exclusive service-resource reservations.
 - Append-only authenticated API audit attempts and outcomes.
+- High-level ERP/WMS work orders, allocation attempts, candidate explanations, worker leases, and workflow correlation.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
@@ -277,6 +278,50 @@ Use `GET /api/v1/workflows` for the operator list,
 Charge, dock, and inspection steps require a matching available
 `SERVICE_EXCLUSIVE` infrastructure resource.
 
+## Submit a factory work order
+
+Business systems can submit intent without choosing a robot or building a
+workflow. Keep `externalReference` stable when retrying the request:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/work-orders \
+  -H "authorization: Bearer $FLEET_TOKEN" \
+  -H "x-fleet-site: plant-a" \
+  -H 'content-type: application/json' \
+  -d '{
+    "name":"Move and inspect inbound pallet",
+    "externalReference":"ERP-WORK-2048",
+    "priority":80,
+    "requiredCapabilities":["pallet_transport"],
+    "payloadKg":300,
+    "pickup":{"stationId":"WAREHOUSE-A","mapId":"plant-a@1","x":10,"y":5,"zoneId":"warehouse"},
+    "dropoff":{"stationId":"ASSEMBLY-02","mapId":"plant-a@1","x":70,"y":25,"zoneId":"production"},
+    "followUpActions":[
+      {"actionId":"settle","name":"Let the load settle","type":"WAIT","durationSeconds":10}
+    ]
+  }'
+```
+
+The response contains the selected robot, every candidate's eligibility and
+reasoning, allocation attempt count, and compiled `workflowId`. Orders remain
+`PENDING` with a scheduled retry when the fleet has no eligible robot. The
+selected robot is revalidated by mission dispatch; another eligible robot can
+be substituted if conditions change before execution.
+
+```bash
+curl -H "authorization: Bearer $FLEET_TOKEN" \
+  -H "x-fleet-site: plant-a" \
+  http://127.0.0.1:4273/api/v1/work-orders
+
+curl -X POST \
+  -H "authorization: Bearer $FLEET_TOKEN" \
+  -H "x-fleet-site: plant-a" \
+  http://127.0.0.1:4273/api/v1/work-orders/WORK_ORDER_ID/cancel
+```
+
+The design and ownership boundaries are documented in the
+[work-order orchestrator architecture](../architecture/WORK_ORDER_ORCHESTRATOR.md).
+
 ## Observe the fleet
 
 The dashboard analytics panel reads `GET /api/v1/analytics/operations`. Prometheus
@@ -297,6 +342,6 @@ carry the same `x-correlation-id` returned to clients. See the
 ```bash
 npm run typecheck
 npm run test:core
-npm run test:postgres # requires TEST_DATABASE_URL
+npm run test:postgres # requires the isolated TEST_DATABASE_URL from .env.example
 npm run build
 ```

@@ -40,6 +40,7 @@ const fallbackState = {
   queue: { pendingMissions: 0, dueMissions: 0, leasedMissions: 0, nextAttemptAt: null, entries: [] },
   alarmSummary: { open: 0, acknowledged: 0, critical: 0, warning: 0, alarms: [] },
   workflows: [],
+  workOrders: [],
   analytics: { robots: { utilizationPercent: 0 }, missions: { completionRatePercent: 0, active: 0, queued: 0 }, workflows: { active: 0, retryCount: 0 }, traffic: { delayedRoutes: 0, scheduledWaitSeconds: 0 } },
 };
 
@@ -108,7 +109,7 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastructureResources, recovery, queue, alarmSummary, workflows, analytics) {
+function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastructureResources, recovery, queue, alarmSummary, workflows, workOrders, analytics) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -161,6 +162,7 @@ function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastruc
     queue,
     alarmSummary,
     workflows,
+    workOrders,
     analytics,
   };
 }
@@ -179,6 +181,7 @@ function normalizePreviewSnapshot(snapshot) {
     queue: snapshot.queue ?? fallbackState.queue,
     alarmSummary: snapshot.alarmSummary ?? fallbackState.alarmSummary,
     workflows: snapshot.workflows ?? [],
+    workOrders: snapshot.workOrders ?? [],
     analytics: snapshot.analytics ?? fallbackState.analytics,
   };
 }
@@ -479,6 +482,22 @@ function renderWorkflows() {
   }).join("") || '<p class="workflow-empty">Create a workflow through <code>POST /api/v1/workflows</code>.</p>';
 }
 
+function renderWorkOrders() {
+  const workOrders = state.workOrders ?? [];
+  $("#work-order-summary").textContent = workOrders.length
+    ? `${workOrders.filter((order) => ["PENDING", "ALLOCATED", "RUNNING", "CANCELLING"].includes(order.status)).length} active · ${workOrders.length} total`
+    : "No orchestrated work orders";
+  $("#work-order-list").innerHTML = workOrders.slice(0, 12).map((order) => {
+    const selected = order.candidates.find((candidate) => candidate.robotId === order.selectedRobotId);
+    const cancellable = ["PENDING", "ALLOCATED", "RUNNING", "CANCELLING"].includes(order.status);
+    return `<article class="work-order-item ${escapeHtml(order.status.toLowerCase())}"><i></i><div>
+      <div class="workflow-title"><strong>${escapeHtml(order.name)}</strong><span>${escapeHtml(order.status)}</span></div>
+      <p>${escapeHtml(order.workOrderId)} · ${escapeHtml(order.pickup.stationId)} → ${escapeHtml(order.dropoff.stationId)}</p>
+      <div class="allocation-line"><b>${escapeHtml(order.selectedRobotId ?? "Awaiting robot")}</b><span>${selected?.score != null ? `score ${selected.score}` : `${order.allocationAttemptCount} allocation attempts`}</span></div>
+    </div>${cancellable ? `<button data-cancel-work-order="${escapeHtml(order.workOrderId)}">Cancel</button>` : ""}</article>`;
+  }).join("") || '<p class="workflow-empty">Submit factory intent through <code>POST /api/v1/work-orders</code>.</p>';
+}
+
 function renderAnalytics() {
   const analytics = state.analytics ?? fallbackState.analytics;
   const values = {
@@ -566,6 +585,7 @@ function renderAll() {
   renderRobotDetail();
   renderMissions();
   renderWorkflows();
+  renderWorkOrders();
   renderAnalytics();
   renderAlerts();
   renderKpis();
@@ -581,7 +601,7 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse, workflowResponse, analyticsResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse, workflowResponse, workOrderResponse, analyticsResponse] = await Promise.all([
     fleetFetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fleetFetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
     fleetFetch(`/api/v1/traffic/restrictions?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
@@ -590,11 +610,12 @@ async function refreshCoreSnapshot() {
     fleetFetch("/api/v1/dispatch/queue", { cache: "no-store" }),
     fleetFetch("/api/v1/alarms", { cache: "no-store" }),
     fleetFetch("/api/v1/workflows", { cache: "no-store" }),
+    fleetFetch("/api/v1/work-orders", { cache: "no-store" }),
     fleetFetch("/api/v1/analytics/operations", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok || !workflowResponse.ok || !analyticsResponse.ok) throw new Error("Fleet coordination state unavailable");
-  const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }, { workflows }, { analytics }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json(), workflowResponse.json(), analyticsResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, resources, recovery, queue, summary, workflows, analytics);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok || !workflowResponse.ok || !workOrderResponse.ok || !analyticsResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }, { workflows }, { workOrders }, { analytics }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json(), workflowResponse.json(), workOrderResponse.json(), analyticsResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, resources, recovery, queue, summary, workflows, workOrders, analytics);
   renderAll();
 }
 
@@ -674,6 +695,19 @@ $("#workflow-list").addEventListener("click", async (event) => {
   try {
     const result = await post(`/api/v1/workflows/${encodeURIComponent(button.dataset.cancelWorkflow)}/cancel`);
     showToast(`${result.workflow.workflowId} ${result.workflow.status.toLowerCase()}`);
+    await refreshCoreSnapshot();
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
+  }
+});
+$("#work-order-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-cancel-work-order]");
+  if (!button || !confirm(`Cancel work order ${button.dataset.cancelWorkOrder}?`)) return;
+  button.disabled = true;
+  try {
+    const result = await post(`/api/v1/work-orders/${encodeURIComponent(button.dataset.cancelWorkOrder)}/cancel`);
+    showToast(`${result.workOrder.workOrderId} ${result.workOrder.status.toLowerCase()}`);
     await refreshCoreSnapshot();
   } catch (error) {
     button.disabled = false;

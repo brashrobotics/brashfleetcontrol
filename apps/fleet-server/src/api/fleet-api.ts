@@ -6,6 +6,7 @@ import {
   parseCreateMissionRequest,
   parseCreateTrafficRestrictionRequest,
   parseCreateWorkflowRequest,
+  parseCreateWorkOrderRequest,
   parseUpdateInfrastructureResourceStatusRequest,
 } from "@brash/contracts";
 import { DomainError } from "@brash/domain";
@@ -52,6 +53,25 @@ export class FleetApi {
 
       if (request.method === "GET" && url.pathname === "/api/v1/workflows") {
         return json({ workflows: await this.core.listWorkflows() });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/work-orders") {
+        return json({ workOrders: await this.core.listWorkOrders() });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/v1/work-orders") {
+        const input = parseCreateWorkOrderRequest(await request.json());
+        return json({ workOrder: await this.core.createWorkOrder(input) }, 201);
+      }
+
+      const workOrderCancellationMatch = url.pathname.match(/^\/api\/v1\/work-orders\/([^/]+)\/cancel$/);
+      if (request.method === "POST" && workOrderCancellationMatch) {
+        return json({ workOrder: await this.core.cancelWorkOrder(decodeURIComponent(workOrderCancellationMatch[1])) });
+      }
+
+      const workOrderMatch = url.pathname.match(/^\/api\/v1\/work-orders\/([^/]+)$/);
+      if (request.method === "GET" && workOrderMatch) {
+        return json({ workOrder: await this.core.getWorkOrder(decodeURIComponent(workOrderMatch[1])) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/v1/workflows") {

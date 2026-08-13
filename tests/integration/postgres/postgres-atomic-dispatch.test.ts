@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   FleetCore,
   WeightedDispatchPolicy,
+  WorkOrderAllocationPolicy,
   createDefaultPlantTopology,
   type IdGenerator,
 } from "@brash/application";
@@ -224,6 +225,96 @@ test("PostgreSQL audit records are queryable and reject mutation", {
       /append-only/,
     );
   } finally {
+    await persistence.close();
+  }
+});
+
+test("concurrent PostgreSQL orchestrator workers claim one work order once", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const first = createPersistence(databaseUrl!);
+  const second = createPersistence(databaseUrl!);
+  await first.migrate();
+  const now = new Date();
+  const workOrderId = `PG-WORK-ORDER-${suffix}`;
+  try {
+    await first.workOrders.create({
+      workOrderId,
+      request: {
+        name: "PostgreSQL orchestrator claim",
+        externalReference: `PG-WORK-REF-${suffix}`,
+        priority: 70,
+        requiredCapabilities: ["pallet_transport"],
+        payloadKg: 10,
+        pickup: { stationId: "WAREHOUSE-A", mapId: "plant-a@1", x: 10, y: 5 },
+        dropoff: { stationId: "QUALITY", mapId: "plant-a@1", x: 73, y: 74 },
+      },
+      status: "PENDING",
+      selectedRobotId: null,
+      workflowId: null,
+      candidates: [],
+      allocationAttemptCount: 0,
+      nextAttemptAt: now,
+      lastAttemptAt: null,
+      failureReason: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    });
+    const claims = await Promise.all([
+      first.workOrders.claimPending(1, { workerId: `A-${suffix}`, claimedAt: now, leaseDurationMs: 30_000 }),
+      second.workOrders.claimPending(1, { workerId: `B-${suffix}`, claimedAt: now, leaseDurationMs: 30_000 }),
+    ]);
+    assert.equal(claims[0].length + claims[1].length, 1);
+    assert.equal(claims.flat()[0].workOrderId, workOrderId);
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
+test("PostgreSQL persists an allocated work order and its preferred mission robot", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-ORCHESTRATOR-${suffix}`;
+  const capability = `orchestrator-${suffix}`;
+  const clock = new ManualClock(new Date().toISOString());
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  await releaseStalePostgresTestHolds(persistence);
+  await persistence.maps.save(createDefaultPlantTopology());
+  const core = createCore(persistence, `OR-${suffix}`, robotId, capability, clock);
+
+  try {
+    await core.start();
+    const created = await core.createWorkOrder({
+      name: "PostgreSQL orchestrated transport",
+      externalReference: `PG-ORCHESTRATOR-${suffix}`,
+      priority: 85,
+      requiredCapabilities: [capability],
+      payloadKg: 25,
+      pickup: { stationId: "WAREHOUSE-A", mapId: "plant-a@1", x: 10, y: 5 },
+      dropoff: { stationId: "QUALITY", mapId: "plant-a@1", x: 73, y: 74 },
+    });
+    assert.equal(created.status, "ALLOCATED");
+    assert.equal(created.selectedRobotId, robotId);
+    assert.ok(created.workflowId);
+    assert.equal((await persistence.workOrders.getById(created.workOrderId))?.workflowId, created.workflowId);
+
+    assert.equal(await core.processWorkflowQueue(), 1);
+    const mission = (await core.getSnapshot()).missions.find((entry) => entry.externalReference?.startsWith("workflow:"));
+    assert.ok(mission);
+    assert.equal(mission.preferredRobotId, robotId);
+    assert.equal(mission.assignedRobotId, robotId);
+    assert.equal((await persistence.missions.getById(mission.missionId))?.preferredRobotId, robotId);
+    assert.equal((await core.getWorkOrder(created.workOrderId)).status, "RUNNING");
+    await persistence.traffic.releaseByMission(mission.missionId, clock.now());
+  } finally {
+    await core.stop();
     await persistence.close();
   }
 });
@@ -593,6 +684,7 @@ function createCore(
     trafficRestrictions: persistence.trafficRestrictions,
     workflows: persistence.workflows,
     workflowResourceReservations: persistence.workflowResourceReservations,
+    workOrders: persistence.workOrders,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -601,6 +693,7 @@ function createCore(
     ], { now: () => clock.now() }),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: `postgres-test-${idPrefix}`,
   });
@@ -627,6 +720,7 @@ function createMultiRobotCore(
     trafficRestrictions: persistence.trafficRestrictions,
     workflows: persistence.workflows,
     workflowResourceReservations: persistence.workflowResourceReservations,
+    workOrders: persistence.workOrders,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -638,6 +732,7 @@ function createMultiRobotCore(
     })), { now: () => clock.now() }),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
     livenessPolicy: new RobotLivenessPolicy(),
     instanceId: `postgres-traffic-test-${idPrefix}`,
   });
@@ -649,14 +744,16 @@ class PrefixedIdGenerator implements IdGenerator {
   private route = 0;
   private workflow = 0;
   private workflowReservation = 0;
+  private workOrder = 0;
 
   constructor(private readonly prefix: string) {}
 
-  next(kind: "mission" | "command" | "route" | "workflow" | "workflowReservation"): string {
+  next(kind: "mission" | "command" | "route" | "workflow" | "workflowReservation" | "workOrder"): string {
     if (kind === "mission") return `${this.prefix}-MISSION-${++this.mission}`;
     if (kind === "command") return `${this.prefix}-COMMAND-${++this.command}`;
     if (kind === "route") return `${this.prefix}-ROUTE-${++this.route}`;
     if (kind === "workflow") return `${this.prefix}-WORKFLOW-${++this.workflow}`;
+    if (kind === "workOrder") return `${this.prefix}-WORK-ORDER-${++this.workOrder}`;
     return `${this.prefix}-WORKFLOW-RESERVATION-${++this.workflowReservation}`;
   }
 }

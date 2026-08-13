@@ -84,6 +84,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - Actor, role, action, target, outcome, site, and request context indexes.
 - Database triggers that reject audit event updates and deletes.
 
+`012_work_order_orchestrator.sql` adds:
+
+- Durable high-level work orders and explainable robot allocation candidates.
+- Priority/retry/lease fields for multi-instance orchestrator workers.
+- Work-order correlation to compiled workflows and preferred mission robots.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

@@ -4,6 +4,7 @@ import type {
   CreateMapVersionRequest,
   CreateMissionRequest,
   CreateTrafficRestrictionRequest,
+  CreateWorkOrderRequest,
   CreateWorkflowRequest,
   InfrastructureReservationPolicy,
   InfrastructureResourceStatus,
@@ -13,6 +14,7 @@ import type {
   MissionLocation,
   UpdateInfrastructureResourceStatusRequest,
   WorkflowStepDefinition,
+  WorkOrderFollowUpAction,
 } from "./fleet-contracts.js";
 
 export class ContractValidationError extends Error {
@@ -95,6 +97,9 @@ export function parseCreateMissionRequest(value: unknown): CreateMissionRequest 
   const externalReference = value.externalReference === undefined
     ? undefined
     : nonEmptyString(value.externalReference, "externalReference", issues);
+  const preferredRobotId = value.preferredRobotId === undefined
+    ? undefined
+    : nonEmptyString(value.preferredRobotId, "preferredRobotId", issues);
 
   if (value.autoDispatch !== undefined && typeof value.autoDispatch !== "boolean") {
     issues.push("autoDispatch must be a boolean when provided.");
@@ -110,7 +115,51 @@ export function parseCreateMissionRequest(value: unknown): CreateMissionRequest 
     pickup,
     dropoff,
     ...(externalReference ? { externalReference } : {}),
+    ...(preferredRobotId ? { preferredRobotId } : {}),
     ...(typeof value.autoDispatch === "boolean" ? { autoDispatch: value.autoDispatch } : {}),
+  };
+}
+
+export function parseCreateWorkOrderRequest(value: unknown): CreateWorkOrderRequest {
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const transport = parseCreateMissionRequest({ ...value, type: "TRANSPORT", autoDispatch: false });
+  const issues: string[] = [];
+  const name = nonEmptyString(value.name, "name", issues);
+  const rawActions = value.followUpActions ?? [];
+  const followUpActions: WorkOrderFollowUpAction[] = [];
+  if (!Array.isArray(rawActions)) {
+    issues.push("followUpActions must be an array when provided.");
+  } else if (rawActions.length > 20) {
+    issues.push("followUpActions cannot contain more than 20 actions.");
+  } else {
+    rawActions.forEach((rawAction, index) => {
+      const path = `followUpActions[${index}]`;
+      if (!isRecord(rawAction)) {
+        issues.push(`${path} must be an object.`);
+        return;
+      }
+      const actionId = nonEmptyString(rawAction.actionId, `${path}.actionId`, issues);
+      const actionName = nonEmptyString(rawAction.name, `${path}.name`, issues);
+      const type = enumValue(rawAction.type, ["WAIT", "CHARGE", "INSPECT", "DOCK"] as const, `${path}.type`, issues);
+      const durationSeconds = finiteNumber(rawAction.durationSeconds, `${path}.durationSeconds`, issues);
+      if (!Number.isInteger(durationSeconds) || durationSeconds < 1) issues.push(`${path}.durationSeconds must be a positive integer.`);
+      const resourceId = rawAction.resourceId === undefined ? undefined : nonEmptyString(rawAction.resourceId, `${path}.resourceId`, issues);
+      if (type === "WAIT" && resourceId) issues.push(`${path}.resourceId is not valid for WAIT.`);
+      if (type !== "WAIT" && !resourceId) issues.push(`${path}.resourceId is required for ${type}.`);
+      followUpActions.push({ actionId, name: actionName, type: type as WorkOrderFollowUpAction["type"], durationSeconds, ...(resourceId ? { resourceId } : {}) });
+    });
+    if (new Set(followUpActions.map((action) => action.actionId)).size !== followUpActions.length) issues.push("followUpActions actionId values must be unique.");
+  }
+  if (issues.length) throw new ContractValidationError(issues);
+  return {
+    name,
+    priority: transport.priority,
+    requiredCapabilities: transport.requiredCapabilities,
+    payloadKg: transport.payloadKg,
+    pickup: transport.pickup,
+    dropoff: transport.dropoff,
+    ...(transport.externalReference ? { externalReference: transport.externalReference } : {}),
+    ...(followUpActions.length ? { followUpActions } : {}),
   };
 }
 

@@ -15,6 +15,7 @@ services:
       start_period: 5s
     volumes:
       - brash-postgres-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
 
 volumes:
   brash-postgres-data:

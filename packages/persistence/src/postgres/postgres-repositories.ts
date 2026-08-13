@@ -31,6 +31,9 @@ import type {
   WorkflowResourceReservationRecord,
   WorkflowResourceReservationRepository,
   WorkflowStepRecord,
+  WorkOrderClaimOptions,
+  WorkOrderRecord,
+  WorkOrderRepository,
 } from "@brash/application";
 import type {
   AlarmSeverity,
@@ -45,6 +48,9 @@ import type {
   MissionEventView,
   FleetRole,
   WorkflowStepDefinition,
+  CreateWorkOrderRequest,
+  OrchestratorCandidateView,
+  WorkOrderStatus,
 } from "@brash/contracts";
 import {
   MapTopology,
@@ -64,6 +70,7 @@ import type { PostgresDatabase } from "./postgres-database.js";
 interface MissionRow {
   mission_id: string;
   external_reference: string | null;
+  preferred_robot_id: string | null;
   priority: number;
   required_capabilities: string[];
   payload_kg: string;
@@ -242,6 +249,25 @@ interface WorkflowResourceReservationRow {
   released_at: Date | null;
 }
 
+interface WorkOrderRow {
+  work_order_id: string;
+  external_reference: string | null;
+  request: CreateWorkOrderRequest;
+  status: WorkOrderStatus;
+  selected_robot_id: string | null;
+  workflow_id: string | null;
+  candidates: OrchestratorCandidateView[];
+  allocation_attempt_count: number;
+  next_attempt_at: Date;
+  last_attempt_at: Date | null;
+  failure_reason: string | null;
+  lease_owner: string | null;
+  lease_expires_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  completed_at: Date | null;
+}
+
 interface TrafficPlanRow {
   route_id: string;
   mission_id: string;
@@ -282,7 +308,7 @@ interface TrafficReservationRow {
 }
 
 const MISSION_COLUMNS = `
-  mission_id, external_reference, priority, required_capabilities, payload_kg,
+  mission_id, external_reference, preferred_robot_id, priority, required_capabilities, payload_kg,
   pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
   created_at, updated_at, recovery_previous_state, recovery_started_at
 `;
@@ -337,14 +363,15 @@ export class PostgresMissionRepository implements MissionRepository {
     const snapshot = mission.snapshot();
     await this.database.query(`
       INSERT INTO missions (
-        mission_id, external_reference, priority, required_capabilities, payload_kg,
+        mission_id, external_reference, preferred_robot_id, priority, required_capabilities, payload_kg,
         pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
         created_at, updated_at, recovery_previous_state, recovery_started_at
       ) VALUES (
-        $1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15
+        $1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16
       )
       ON CONFLICT (mission_id) DO UPDATE SET
         external_reference = EXCLUDED.external_reference,
+        preferred_robot_id = EXCLUDED.preferred_robot_id,
         priority = EXCLUDED.priority,
         required_capabilities = EXCLUDED.required_capabilities,
         payload_kg = EXCLUDED.payload_kg,
@@ -361,6 +388,7 @@ export class PostgresMissionRepository implements MissionRepository {
     `, [
       snapshot.missionId,
       snapshot.externalReference ?? null,
+      snapshot.preferredRobotId ?? null,
       snapshot.priority,
       JSON.stringify(snapshot.requiredCapabilities),
       snapshot.payloadKg,
@@ -1122,6 +1150,68 @@ export class PostgresWorkflowResourceReservationRepository implements WorkflowRe
   }
 }
 
+export class PostgresWorkOrderRepository implements WorkOrderRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async findByExternalReference(externalReference: string): Promise<WorkOrderRecord | null> {
+    const result = await this.database.query<WorkOrderRow>("SELECT * FROM work_orders WHERE external_reference = $1", [externalReference]);
+    return result.rows[0] ? workOrderFromRow(result.rows[0]) : null;
+  }
+
+  async getById(workOrderId: string): Promise<WorkOrderRecord | null> {
+    const result = await this.database.query<WorkOrderRow>("SELECT * FROM work_orders WHERE work_order_id = $1", [workOrderId]);
+    return result.rows[0] ? workOrderFromRow(result.rows[0]) : null;
+  }
+
+  async list(): Promise<WorkOrderRecord[]> {
+    const result = await this.database.query<WorkOrderRow>("SELECT * FROM work_orders ORDER BY created_at DESC, work_order_id");
+    return result.rows.map(workOrderFromRow);
+  }
+
+  async create(workOrder: WorkOrderRecord): Promise<void> {
+    await this.database.query(`
+      INSERT INTO work_orders (
+        work_order_id, external_reference, request, status, selected_robot_id,
+        workflow_id, candidates, allocation_attempt_count, next_attempt_at,
+        last_attempt_at, failure_reason, lease_owner, lease_expires_at,
+        created_at, updated_at, completed_at
+      ) VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+    `, workOrderValues(workOrder));
+  }
+
+  async save(workOrder: WorkOrderRecord): Promise<void> {
+    await this.database.query(`
+      UPDATE work_orders SET external_reference = $2, request = $3::jsonb,
+        status = $4, selected_robot_id = $5, workflow_id = $6,
+        candidates = $7::jsonb, allocation_attempt_count = $8,
+        next_attempt_at = $9, last_attempt_at = $10, failure_reason = $11,
+        lease_owner = $12, lease_expires_at = $13, created_at = $14,
+        updated_at = $15, completed_at = $16
+      WHERE work_order_id = $1
+    `, workOrderValues(workOrder));
+  }
+
+  async claimPending(limit: number, options: WorkOrderClaimOptions): Promise<WorkOrderRecord[]> {
+    return this.database.transaction(async () => {
+      const result = await this.database.query<WorkOrderRow>(`
+        WITH candidates AS (
+          SELECT work_order_id FROM work_orders
+          WHERE status = 'PENDING' AND next_attempt_at <= $2
+            AND (lease_expires_at IS NULL OR lease_expires_at <= $2)
+          ORDER BY (request->>'priority')::integer DESC, next_attempt_at, work_order_id
+          FOR UPDATE SKIP LOCKED LIMIT $1
+        )
+        UPDATE work_orders AS work_order
+        SET lease_owner = $3, lease_expires_at = $2 + ($4 * interval '1 millisecond'), updated_at = $2
+        FROM candidates
+        WHERE work_order.work_order_id = candidates.work_order_id
+        RETURNING work_order.*
+      `, [limit, options.claimedAt, options.workerId, options.leaseDurationMs]);
+      return result.rows.map(workOrderFromRow);
+    });
+  }
+}
+
 export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
   constructor(private readonly database: PostgresDatabase) {}
 
@@ -1515,6 +1605,33 @@ function workflowResourceReservationFromRow(row: WorkflowResourceReservationRow)
   };
 }
 
+function workOrderFromRow(row: WorkOrderRow): WorkOrderRecord {
+  return {
+    workOrderId: row.work_order_id,
+    request: structuredClone(row.request),
+    status: row.status,
+    selectedRobotId: row.selected_robot_id,
+    workflowId: row.workflow_id,
+    candidates: structuredClone(row.candidates),
+    allocationAttemptCount: row.allocation_attempt_count,
+    nextAttemptAt: new Date(row.next_attempt_at),
+    lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
+    failureReason: row.failure_reason,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    completedAt: row.completed_at ? new Date(row.completed_at) : null,
+  };
+}
+
+function workOrderValues(record: WorkOrderRecord): unknown[] {
+  return [record.workOrderId, record.request.externalReference ?? null, JSON.stringify(record.request), record.status,
+    record.selectedRobotId, record.workflowId, JSON.stringify(record.candidates), record.allocationAttemptCount,
+    record.nextAttemptAt, record.lastAttemptAt, record.failureReason, record.leaseOwner, record.leaseExpiresAt,
+    record.createdAt, record.updatedAt, record.completedAt];
+}
+
 function workflowStepValues(step: WorkflowStepRecord, updatedAt: Date): unknown[] {
   return [
     step.workflowId,
@@ -1593,6 +1710,7 @@ function missionFromRow(row: MissionRow): Mission {
   return Mission.restore({
     missionId: row.mission_id,
     ...(row.external_reference ? { externalReference: row.external_reference } : {}),
+    ...(row.preferred_robot_id ? { preferredRobotId: row.preferred_robot_id } : {}),
     priority: row.priority,
     requiredCapabilities: [...row.required_capabilities],
     payloadKg: Number(row.payload_kg),

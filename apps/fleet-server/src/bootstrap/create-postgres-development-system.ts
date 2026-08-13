@@ -3,6 +3,7 @@ import {
   RandomIdGenerator,
   SystemClock,
   WeightedDispatchPolicy,
+  WorkOrderAllocationPolicy,
   createDefaultPlantTopology,
 } from "@brash/application";
 import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
@@ -40,12 +41,14 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       trafficRestrictions: persistence.trafficRestrictions,
       workflows: persistence.workflows,
       workflowResourceReservations: persistence.workflowResourceReservations,
+      workOrders: persistence.workOrders,
       transactions: persistence.transactions,
       clock: new SystemClock(),
       ids: new RandomIdGenerator(),
       adapter,
       dispatchPolicy: new WeightedDispatchPolicy(),
       trafficScheduler: new TrafficScheduler(),
+      workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
       livenessPolicy: new RobotLivenessPolicy(),
       instanceId: `fleet-server-${randomUUID()}`,
     });

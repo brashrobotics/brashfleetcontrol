@@ -45,3 +45,9 @@ safe across multiple Fleet Core instances. Transport/service steps correlate a
 durable mission, wait steps sleep without holding a worker, and service actions
 hold an exclusive infrastructure reservation until success, retry, failure, or
 cancellation.
+
+`WorkOrderWorker` claims high-level factory orders every second. It retains the
+complete candidate evaluation, retries when no robot is currently eligible,
+and compiles a successful allocation into a durable workflow. Expiring leases
+and PostgreSQL `SKIP LOCKED` claims prevent duplicate processing across server
+instances.
