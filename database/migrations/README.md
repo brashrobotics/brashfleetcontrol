@@ -32,6 +32,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - `mission_events`, an ordered audit trail of mission lifecycle and delivery events.
 - Due-time scheduling and expiring worker leases for safe command retries across server instances.
 
+`003_map_topology_and_traffic_scheduler.sql` adds:
+
+- Versioned graph topologies for factory waypoints, stations, intersections, and lanes.
+- Durable route plans and time-window reservations for shared edges and nodes.
+- A PostgreSQL exclusion constraint that rejects overlapping active reservations even under concurrent schedulers.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

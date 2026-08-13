@@ -73,16 +73,14 @@
                 <div class="lane-corner corner-1 map-layer routes"></div>
                 <div class="lane-corner corner-2 map-layer routes"></div>
 
+                <canvas id="traffic-topology-canvas" class="traffic-topology-canvas map-layer topology" aria-hidden="true"></canvas>
+                <div id="topology-node-layer" class="topology-node-layer map-layer topology" aria-label="Traffic topology"></div>
+
                 <div class="machine-group mg-1"><i></i><i></i><i></i></div>
                 <div class="machine-group mg-2"><i></i><i></i><i></i><i></i></div>
                 <div class="machine-group mg-3"><i></i><i></i><i></i></div>
                 <div class="rack-group rg-1"><i></i><i></i><i></i><i></i><i></i></div>
                 <div class="rack-group rg-2"><i></i><i></i><i></i><i></i></div>
-
-                <button class="station station-a map-layer stations" style="--x: 30%; --y: 23%" aria-label="Press A station"><i></i><span>Press A</span></button>
-                <button class="station station-b map-layer stations" style="--x: 72%; --y: 24%" aria-label="Assembly 2 station"><i></i><span>Assembly 2</span></button>
-                <button class="station station-c map-layer stations" style="--x: 73%; --y: 74%" aria-label="Quality station"><i></i><span>Quality</span></button>
-                <button class="station charging map-layer stations" style="--x: 50%; --y: 84%" aria-label="Charging station"><i>ϟ</i><span>Charger C-02</span></button>
 
                 <div id="robot-layer" class="robot-layer map-layer robots" aria-live="polite"></div>
               </div>
@@ -93,12 +91,13 @@
               <div class="layer-popover" id="layer-popover" hidden>
                 <div><strong>Map layers</strong><button id="close-layers" aria-label="Close">×</button></div>
                 <label><input type="checkbox" data-layer="routes" checked /> Routes</label>
+                <label><input type="checkbox" data-layer="topology" checked /> Traffic reservations</label>
                 <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
                 <label><input type="checkbox" data-layer="zones" checked /> Safety zones</label>
                 <label><input type="checkbox" data-layer="robots" checked /> Robot labels</label>
               </div>
             </div>
-            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend charging"></i> Charging</span><span><i class="legend blocked"></i> Blocked</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
+            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend reserved"></i> Reserved lane</span><span><i class="legend delayed"></i> Scheduled wait</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
           </article>
 
           <aside class="detail-stack">
@@ -119,13 +118,19 @@
               <div class="small-panel-title"><div><span class="section-index">03</span><h2>Live events</h2></div><button id="clear-events">Clear</button></div>
               <div id="alert-list" class="alert-list"></div>
             </article>
+
+            <article class="traffic-card panel">
+              <div class="small-panel-title"><div><span class="section-index">04</span><h2>Traffic schedule</h2></div><span class="scheduler-state"><i></i> DEADLOCK SAFE</span></div>
+              <div class="traffic-metrics"><div><strong id="active-route-count">0</strong><span>ACTIVE ROUTES</span></div><div><strong id="reserved-resource-count">0</strong><span>RESOURCES</span></div><div><strong id="traffic-delay">0s</strong><span>MAX WAIT</span></div></div>
+              <div id="traffic-plan-list" class="traffic-plan-list"></div>
+            </article>
           </aside>
         </section>
 
         <section class="mission-drawer panel" id="mission-drawer">
-          <div class="drawer-heading"><div><span class="section-index">04</span><div><h2>Mission flow</h2><p>Active and queued transport jobs</p></div></div><div><button class="text-button" id="show-all-missions">All missions</button><button class="collapse-button" id="collapse-missions" aria-label="Collapse missions">⌄</button></div></div>
+          <div class="drawer-heading"><div><span class="section-index">05</span><div><h2>Mission flow</h2><p>Active and queued transport jobs</p></div></div><div><button class="text-button" id="show-all-missions">All missions</button><button class="collapse-button" id="collapse-missions" aria-label="Collapse missions">⌄</button></div></div>
           <div class="mission-table-wrap">
-            <table><thead><tr><th>Mission</th><th>Robot</th><th>Origin</th><th>Destination</th><th>Status</th><th>Progress</th><th>Created</th></tr></thead><tbody id="mission-table"></tbody></table>
+            <table><thead><tr><th>Mission</th><th>Robot</th><th>Origin</th><th>Destination</th><th>Status</th><th>Progress</th><th>Traffic slot</th><th>Created</th></tr></thead><tbody id="mission-table"></tbody></table>
           </div>
         </section>
       </main>

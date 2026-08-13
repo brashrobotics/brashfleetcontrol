@@ -1,20 +1,27 @@
-import { FleetCore, WeightedDispatchPolicy } from "@brash/application";
+import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology } from "@brash/application";
+import { TrafficScheduler } from "@brash/domain";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
+import type { SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionRepository,
+  InMemoryMapTopologyRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
+  InMemoryTrafficPlanRepository,
 } from "@brash/persistence";
 import { ManualClock, SequentialIdGenerator } from "./fakes.js";
 import { robotFixture } from "./fixtures.js";
 
-export function createTestFleetSystem(options: { autoAdvance?: boolean } = {}) {
+export function createTestFleetSystem(options: {
+  autoAdvance?: boolean;
+  robots?: SimulatorRobotDefinition[];
+} = {}) {
   const clock = new ManualClock();
   const ids = new SequentialIdGenerator();
-  const adapter = new SimulatorAdapter([
+  const adapter = new SimulatorAdapter(options.robots ?? [
     robotFixture({
       robotId: "BR-01",
       displayName: "Atlas",
@@ -42,6 +49,8 @@ export function createTestFleetSystem(options: { autoAdvance?: boolean } = {}) {
   const commands = new InMemoryCommandRepository();
   const decisions = new InMemoryAssignmentDecisionRepository();
   const events = new InMemoryMissionEventRepository();
+  const maps = new InMemoryMapTopologyRepository([createDefaultPlantTopology()]);
+  const traffic = new InMemoryTrafficPlanRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     missions,
@@ -49,13 +58,16 @@ export function createTestFleetSystem(options: { autoAdvance?: boolean } = {}) {
     commands,
     decisions,
     events,
+    maps,
+    traffic,
     transactions,
     clock,
     ids,
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
+    trafficScheduler: new TrafficScheduler(),
     instanceId: "test-fleet-core",
   });
 
-  return { core, adapter, clock, ids, missions, robots, commands, decisions, events, transactions };
+  return { core, adapter, clock, ids, missions, robots, commands, decisions, events, maps, traffic, transactions };
 }

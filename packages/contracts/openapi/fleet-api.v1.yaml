@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.2.0
-  description: Vendor-independent mission creation, dispatch, and Fleet state API.
+  version: 0.3.0
+  description: Vendor-independent mission, dispatch, map topology, and traffic reservation API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -32,6 +32,58 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FleetSnapshot"
+  /api/v1/maps:
+    get:
+      operationId: listMapTopologies
+      responses:
+        "200":
+          description: Published map topologies known to Fleet Core
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [maps]
+                properties:
+                  maps:
+                    type: array
+                    items: { $ref: "#/components/schemas/MapTopology" }
+  /api/v1/maps/{mapId}/topology:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    get:
+      operationId: getMapTopology
+      responses:
+        "200":
+          description: Versioned traffic graph for one factory map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [topology]
+                properties:
+                  topology: { $ref: "#/components/schemas/MapTopology" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/traffic/schedule:
+    get:
+      operationId: getTrafficSchedule
+      parameters:
+        - name: mapId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Route plans and time-window reservations for a map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schedule]
+                properties:
+                  schedule: { $ref: "#/components/schemas/TrafficSchedule" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/v1/missions:
     post:
       operationId: createMission
@@ -105,10 +157,33 @@ paths:
                     items: { $ref: "#/components/schemas/MissionEvent" }
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/missions/{missionId}/route:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    get:
+      operationId: getMissionRoute
+      responses:
+        "200":
+          description: Traffic plan assigned to a mission, if one exists
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [route]
+                properties:
+                  route:
+                    oneOf:
+                      - { $ref: "#/components/schemas/TrafficPlan" }
+                      - { type: "null" }
 components:
   parameters:
     MissionId:
       name: missionId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    MapId:
+      name: mapId
       in: path
       required: true
       schema: { type: string, minLength: 1 }
@@ -194,7 +269,7 @@ components:
         missionId: { type: string }
         type:
           type: string
-          enum: [MISSION_QUEUED, ASSIGNMENT_NOT_FOUND, MISSION_ASSIGNED, COMMAND_DELIVERY_FAILED, COMMAND_DISPATCHED, COMMAND_REJECTED, MISSION_EXECUTING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED]
+          enum: [MISSION_QUEUED, ASSIGNMENT_NOT_FOUND, MISSION_ASSIGNED, ROUTE_RESERVED, ROUTE_DELAYED, ROUTE_RELEASED, COMMAND_DELIVERY_FAILED, COMMAND_DISPATCHED, COMMAND_REJECTED, MISSION_EXECUTING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED]
         state:
           type: string
           enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, CANCELLING, CANCELLED, COMPLETED, FAILED]
@@ -239,7 +314,7 @@ components:
         reason: { type: string }
     DispatchResult:
       type: object
-      required: [mission, decision, receipt]
+      required: [mission, decision, receipt, route]
       properties:
         mission: { $ref: "#/components/schemas/Mission" }
         decision: { $ref: "#/components/schemas/AssignmentDecision" }
@@ -247,6 +322,113 @@ components:
           oneOf:
             - { $ref: "#/components/schemas/CommandReceipt" }
             - { type: "null" }
+        route:
+          oneOf:
+            - { $ref: "#/components/schemas/TrafficPlan" }
+            - { type: "null" }
+    MapNode:
+      type: object
+      additionalProperties: false
+      required: [nodeId, label, kind, x, y]
+      properties:
+        nodeId: { type: string }
+        label: { type: string }
+        kind: { type: string, enum: [WAYPOINT, INTERSECTION, STATION, HOLDING_POINT] }
+        x: { type: number }
+        y: { type: number }
+        stationId: { type: string }
+        zoneId: { type: string }
+    MapEdge:
+      type: object
+      additionalProperties: false
+      required: [edgeId, fromNodeId, toNodeId, directed, lengthMeters, travelTimeSeconds]
+      properties:
+        edgeId: { type: string }
+        fromNodeId: { type: string }
+        toNodeId: { type: string }
+        directed: { type: boolean }
+        lengthMeters: { type: number, minimum: 0 }
+        travelTimeSeconds: { type: number, exclusiveMinimum: 0 }
+    MapTopology:
+      type: object
+      additionalProperties: false
+      required: [mapId, displayName, revision, nodes, edges]
+      properties:
+        mapId: { type: string }
+        displayName: { type: string }
+        revision: { type: integer, minimum: 1 }
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/MapNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/MapEdge" }
+    TrafficRouteSegment:
+      type: object
+      additionalProperties: false
+      required: [sequence, phase, edgeId, fromNodeId, toNodeId, lengthMeters, enterAt, exitAt]
+      properties:
+        sequence: { type: integer, minimum: 0 }
+        phase: { type: string, enum: [TO_PICKUP, TO_DROPOFF] }
+        edgeId: { type: string }
+        fromNodeId: { type: string }
+        toNodeId: { type: string }
+        lengthMeters: { type: number, minimum: 0 }
+        enterAt: { type: string, format: date-time }
+        exitAt: { type: string, format: date-time }
+    TrafficPlan:
+      type: object
+      additionalProperties: false
+      required: [routeId, missionId, robotId, mapId, status, originNodeId, pickupNodeId, dropoffNodeId, requestedStartAt, scheduledStartAt, expectedArrivalAt, totalDistanceMeters, totalWaitSeconds, segments, plannedAt, releasedAt]
+      properties:
+        routeId: { type: string }
+        missionId: { type: string }
+        robotId: { type: string }
+        mapId: { type: string }
+        status: { type: string, enum: [ACTIVE, RELEASED] }
+        originNodeId: { type: string }
+        pickupNodeId: { type: string }
+        dropoffNodeId: { type: string }
+        requestedStartAt: { type: string, format: date-time }
+        scheduledStartAt: { type: string, format: date-time }
+        expectedArrivalAt: { type: string, format: date-time }
+        totalDistanceMeters: { type: number, minimum: 0 }
+        totalWaitSeconds: { type: number, minimum: 0 }
+        segments:
+          type: array
+          items: { $ref: "#/components/schemas/TrafficRouteSegment" }
+        plannedAt: { type: string, format: date-time }
+        releasedAt: { type: [string, "null"], format: date-time }
+    TrafficReservation:
+      type: object
+      additionalProperties: false
+      required: [reservationId, routeId, missionId, robotId, mapId, resourceId, resourceType, sequence, startsAt, endsAt, state, releasedAt]
+      properties:
+        reservationId: { type: string }
+        routeId: { type: string }
+        missionId: { type: string }
+        robotId: { type: string }
+        mapId: { type: string }
+        resourceId: { type: string }
+        resourceType: { type: string, enum: [EDGE, NODE] }
+        sequence: { type: integer, minimum: 0 }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        state: { type: string, enum: [ACTIVE, RELEASED] }
+        releasedAt: { type: [string, "null"], format: date-time }
+    TrafficSchedule:
+      type: object
+      additionalProperties: false
+      required: [mapId, updatedAt, plans, reservations]
+      properties:
+        mapId: { type: string }
+        updatedAt: { type: string, format: date-time }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/TrafficPlan" }
+        reservations:
+          type: array
+          items: { $ref: "#/components/schemas/TrafficReservation" }
     RobotState:
       type: object
       required: [schemaVersion, robotId, sequence, observedAt, connection, availability, batteryPercent, pose, activeMissionId]

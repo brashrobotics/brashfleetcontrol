@@ -33,6 +33,23 @@ export class FleetApi {
         return json(await this.core.getSnapshot());
       }
 
+      if (request.method === "GET" && url.pathname === "/api/v1/maps") {
+        return json({ maps: await this.core.listMapTopologies() });
+      }
+
+      const mapTopologyMatch = url.pathname.match(/^\/api\/v1\/maps\/([^/]+)\/topology$/);
+      if (request.method === "GET" && mapTopologyMatch) {
+        return json({ topology: await this.core.getMapTopology(decodeURIComponent(mapTopologyMatch[1])) });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/traffic/schedule") {
+        const mapId = url.searchParams.get("mapId");
+        if (!mapId) {
+          return json({ error: { code: "MAP_ID_REQUIRED", message: "The mapId query parameter is required." } }, 400);
+        }
+        return json({ schedule: await this.core.getTrafficSchedule(mapId) });
+      }
+
       if (request.method === "POST" && url.pathname === "/api/v1/missions") {
         const input = parseCreateMissionRequest(await request.json());
         const mission = await this.core.createMission(input);
@@ -45,6 +62,11 @@ export class FleetApi {
       const missionEventsMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/events$/);
       if (request.method === "GET" && missionEventsMatch) {
         return json({ events: await this.core.getMissionEvents(decodeURIComponent(missionEventsMatch[1])) });
+      }
+
+      const missionRouteMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/route$/);
+      if (request.method === "GET" && missionRouteMatch) {
+        return json({ route: await this.core.getMissionRoute(decodeURIComponent(missionRouteMatch[1])) });
       }
 
       const missionMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)$/);

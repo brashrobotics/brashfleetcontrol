@@ -20,12 +20,16 @@ What works today:
 - Optional PostgreSQL persistence for Fleet Core
 - Atomic multi-process robot/mission reservation
 - Durable command outbox with restart recovery
+- Versioned factory traffic graph with deterministic shortest-path routing
+- PostgreSQL-backed edge/node time-window reservations
+- Conservative full-route scheduling that prevents reservation deadlocks
+- Live topology, route, delay, and reservation visibility in the operator console
 
 What is not production-ready yet:
 
 - Motor, safety PLC, and sensor integrations
 - Real localization and navigation
-- Multi-robot traffic reservations
+- Priority preemption, route cancellation recovery, and dynamic obstacle replanning
 - Authentication and role-based authorization
 - Device certificates, signed OTA updates, and rollback
 - Production observability and black-box recording
@@ -51,6 +55,7 @@ The repository now also contains the first vendor-independent Fleet Core impleme
 - Deterministic SimulatorAdapter
 - Capability, payload, map, zone, availability, and battery filtering
 - Explainable weighted robot selection
+- Map-aware routing and conflict-free traffic time slots
 - Idempotent command handling
 - Mission execution state reconciliation
 - Versioned `/api/v1` HTTP endpoints

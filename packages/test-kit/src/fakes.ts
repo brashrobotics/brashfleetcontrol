@@ -20,10 +20,11 @@ export class ManualClock implements Clock {
 export class SequentialIdGenerator implements IdGenerator {
   private mission = 0;
   private command = 0;
+  private route = 0;
 
-  next(prefix: "mission" | "command"): string {
+  next(prefix: "mission" | "command" | "route"): string {
     if (prefix === "mission") return `MISSION-${String(++this.mission).padStart(4, "0")}`;
-    return `COMMAND-${String(++this.command).padStart(4, "0")}`;
+    if (prefix === "command") return `COMMAND-${String(++this.command).padStart(4, "0")}`;
+    return `ROUTE-${String(++this.route).padStart(4, "0")}`;
   }
 }
-

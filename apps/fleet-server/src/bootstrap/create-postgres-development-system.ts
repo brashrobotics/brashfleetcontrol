@@ -3,7 +3,9 @@ import {
   RandomIdGenerator,
   SystemClock,
   WeightedDispatchPolicy,
+  createDefaultPlantTopology,
 } from "@brash/application";
+import { TrafficScheduler } from "@brash/domain";
 import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
@@ -14,6 +16,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
   const persistence = new PostgresPersistence(config);
   try {
     await persistence.migrate();
+    await persistence.maps.save(createDefaultPlantTopology());
     const adapter = createDevelopmentAdapter();
     const core = new FleetCore({
       missions: persistence.missions,
@@ -21,11 +24,14 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       commands: persistence.commands,
       decisions: persistence.decisions,
       events: persistence.events,
+      maps: persistence.maps,
+      traffic: persistence.traffic,
       transactions: persistence.transactions,
       clock: new SystemClock(),
       ids: new RandomIdGenerator(),
       adapter,
       dispatchPolicy: new WeightedDispatchPolicy(),
+      trafficScheduler: new TrafficScheduler(),
       instanceId: `fleet-server-${randomUUID()}`,
     });
 

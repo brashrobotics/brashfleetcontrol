@@ -23,6 +23,29 @@ test("API creates, assigns, dispatches, executes, and completes a transport miss
   assert.equal(created.dispatch.decision.selectedRobotId, "BR-01");
   assert.equal(created.dispatch.receipt.status, "ACCEPTED");
 
+  const topologyResponse = await api.fetch(new Request(
+    "http://fleet.test/api/v1/maps/plant-a%401/topology",
+  ));
+  assert.equal(topologyResponse.status, 200);
+  const topology = await topologyResponse.json() as { topology: { nodes: unknown[]; edges: unknown[] } };
+  assert.ok(topology.topology.nodes.length >= 8);
+  assert.ok(topology.topology.edges.length >= 8);
+
+  const activeRouteResponse = await api.fetch(new Request(
+    `http://fleet.test/api/v1/missions/${created.mission.missionId}/route`,
+  ));
+  const activeRoute = await activeRouteResponse.json() as { route: { status: string; segments: unknown[] } };
+  assert.equal(activeRoute.route.status, "ACTIVE");
+  assert.ok(activeRoute.route.segments.length > 0);
+
+  const scheduleResponse = await api.fetch(new Request(
+    "http://fleet.test/api/v1/traffic/schedule?mapId=plant-a%401",
+  ));
+  assert.equal(scheduleResponse.status, 200);
+  const schedule = await scheduleResponse.json() as { schedule: { plans: unknown[]; reservations: unknown[] } };
+  assert.equal(schedule.schedule.plans.length, 1);
+  assert.ok(schedule.schedule.reservations.length > 0);
+
   clock.advance(1_000);
   await adapter.startMission(created.mission.commandId);
   clock.advance(2_000);
@@ -35,6 +58,12 @@ test("API creates, assigns, dispatches, executes, and completes a transport miss
   const completed = await missionResponse.json() as { mission: { state: string } };
   assert.equal(completed.mission.state, "COMPLETED");
 
+  const releasedRouteResponse = await api.fetch(new Request(
+    `http://fleet.test/api/v1/missions/${created.mission.missionId}/route`,
+  ));
+  const releasedRoute = await releasedRouteResponse.json() as { route: { status: string } };
+  assert.equal(releasedRoute.route.status, "RELEASED");
+
   const eventsResponse = await api.fetch(new Request(
     `http://fleet.test/api/v1/missions/${created.mission.missionId}/events`,
   ));
@@ -43,9 +72,11 @@ test("API creates, assigns, dispatches, executes, and completes a transport miss
   assert.deepEqual(timeline.events.map((event) => event.type), [
     "MISSION_QUEUED",
     "MISSION_ASSIGNED",
+    "ROUTE_RESERVED",
     "COMMAND_DISPATCHED",
     "MISSION_EXECUTING",
     "MISSION_COMPLETED",
+    "ROUTE_RELEASED",
   ]);
 
   const snapshotResponse = await api.fetch(new Request("http://fleet.test/api/v1/fleet/snapshot"));

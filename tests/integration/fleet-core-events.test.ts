@@ -24,9 +24,11 @@ test("Fleet Core reconciles simulator execution events into mission and robot st
   assert.deepEqual(events.map((event) => event.type), [
     "MISSION_QUEUED",
     "MISSION_ASSIGNED",
+    "ROUTE_RESERVED",
     "COMMAND_DISPATCHED",
     "MISSION_EXECUTING",
     "MISSION_COMPLETED",
+    "ROUTE_RELEASED",
   ]);
   assert.equal(events.at(-1)?.state, "COMPLETED");
   assert.equal(events.at(-1)?.commandId, dispatched.mission.commandId);

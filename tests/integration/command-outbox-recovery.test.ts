@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FleetCore, WeightedDispatchPolicy } from "@brash/application";
+import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology } from "@brash/application";
 import type { MissionCommand } from "@brash/contracts";
 import type { RobotAdapter } from "@brash/robot-adapter-sdk";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
+import { TrafficScheduler } from "@brash/domain";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionRepository,
+  InMemoryMapTopologyRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
+  InMemoryTrafficPlanRepository,
 } from "@brash/persistence";
 import {
   ManualClock,
@@ -53,11 +56,14 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
     events: new InMemoryMissionEventRepository(),
+    maps: new InMemoryMapTopologyRepository([createDefaultPlantTopology()]),
+    traffic: new InMemoryTrafficPlanRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
+    trafficScheduler: new TrafficScheduler(),
     instanceId: "recovery-test",
   };
 
@@ -90,6 +96,8 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
     events: new InMemoryMissionEventRepository(),
+    maps: new InMemoryMapTopologyRepository([createDefaultPlantTopology()]),
+    traffic: new InMemoryTrafficPlanRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
@@ -97,6 +105,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
       robotFixture({ robotId: "BR-WORKER-01" }),
     ], { now: () => clock.now() })),
     dispatchPolicy: new WeightedDispatchPolicy(),
+    trafficScheduler: new TrafficScheduler(),
     instanceId: "outbox-worker-test",
   };
   const core = new FleetCore(dependencies);
@@ -116,6 +125,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
   assert.deepEqual(events.map((event) => event.type), [
     "MISSION_QUEUED",
     "MISSION_ASSIGNED",
+    "ROUTE_RESERVED",
     "COMMAND_DELIVERY_FAILED",
     "COMMAND_DISPATCHED",
   ]);
@@ -130,10 +140,13 @@ test("startup reconciliation does not overwrite a durable reservation with stale
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
     events: new InMemoryMissionEventRepository(),
+    maps: new InMemoryMapTopologyRepository([createDefaultPlantTopology()]),
+    traffic: new InMemoryTrafficPlanRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
     dispatchPolicy: new WeightedDispatchPolicy(),
+    trafficScheduler: new TrafficScheduler(),
     instanceId: "reconciliation-test",
   };
   const definition = robotFixture({ robotId: "BR-RECONCILE-01" });

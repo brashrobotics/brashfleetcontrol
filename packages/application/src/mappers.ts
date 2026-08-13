@@ -1,9 +1,18 @@
 import {
   FLEET_SCHEMA_VERSION,
+  type MapTopologyView,
   type MissionView,
   type RobotView,
+  type TrafficPlanView,
+  type TrafficReservationView,
 } from "@brash/contracts";
-import type { Mission, Robot } from "@brash/domain";
+import type {
+  MapTopology,
+  Mission,
+  Robot,
+  TrafficPlanSnapshot,
+  TrafficReservationSnapshot,
+} from "@brash/domain";
 
 export function missionToView(mission: Mission): MissionView {
   const snapshot = mission.snapshot();
@@ -51,3 +60,47 @@ export function robotToView(robot: Robot): RobotView {
   };
 }
 
+export function topologyToView(topology: MapTopology): MapTopologyView {
+  const snapshot = topology.snapshot();
+  return {
+    mapId: snapshot.mapId,
+    displayName: snapshot.displayName,
+    revision: snapshot.revision,
+    nodes: snapshot.nodes.map((node) => ({ ...node })),
+    edges: snapshot.edges.map((edge) => ({ ...edge })),
+  };
+}
+
+export function trafficPlanToView(plan: TrafficPlanSnapshot): TrafficPlanView {
+  return {
+    routeId: plan.routeId,
+    missionId: plan.missionId,
+    robotId: plan.robotId,
+    mapId: plan.mapId,
+    status: plan.status,
+    originNodeId: plan.originNodeId,
+    pickupNodeId: plan.pickupNodeId,
+    dropoffNodeId: plan.dropoffNodeId,
+    requestedStartAt: plan.requestedStartAt.toISOString(),
+    scheduledStartAt: plan.scheduledStartAt.toISOString(),
+    expectedArrivalAt: plan.expectedArrivalAt.toISOString(),
+    totalDistanceMeters: plan.totalDistanceMeters,
+    totalWaitSeconds: plan.totalWaitSeconds,
+    segments: plan.segments.map((segment) => ({
+      ...segment,
+      enterAt: segment.enterAt.toISOString(),
+      exitAt: segment.exitAt.toISOString(),
+    })),
+    plannedAt: plan.plannedAt.toISOString(),
+    releasedAt: plan.releasedAt?.toISOString() ?? null,
+  };
+}
+
+export function trafficReservationToView(reservation: TrafficReservationSnapshot): TrafficReservationView {
+  return {
+    ...reservation,
+    startsAt: reservation.startsAt.toISOString(),
+    endsAt: reservation.endsAt.toISOString(),
+    releasedAt: reservation.releasedAt?.toISOString() ?? null,
+  };
+}

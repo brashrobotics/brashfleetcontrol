@@ -10,6 +10,10 @@ Stores durable records of significant technical and product decisions.
 
 For each ADR, record context, decision, alternatives, consequences, status, date, and superseding decision.
 
+## Current records
+
+- [ADR 0003: Full-route time-window reservations](./0003-full-route-time-window-reservations.md)
+
 ## Boundaries
 
 Do not rewrite history after adoption; supersede an ADR with a new one.

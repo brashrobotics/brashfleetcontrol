@@ -2,12 +2,14 @@ import type {
   AssignmentDecisionRepository,
   CommandClaimOptions,
   CommandRepository,
+  MapTopologyRepository,
   MissionEventRepository,
   MissionRepository,
   NewMissionEvent,
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
+  TrafficPlanRepository,
 } from "@brash/application";
 import type {
   AssignmentDecision,
@@ -17,12 +19,16 @@ import type {
   MissionEventView,
 } from "@brash/contracts";
 import {
+  MapTopology,
   Mission,
   Robot,
+  type MapTopologySnapshot,
   type MissionLocation,
   type MissionState,
   type RobotAvailability,
   type RobotConnection,
+  type TrafficPlanSnapshot,
+  type TrafficReservationSnapshot,
 } from "@brash/domain";
 import type { PostgresDatabase } from "./postgres-database.js";
 
@@ -81,6 +87,47 @@ interface MissionEventRow {
   occurred_at: Date;
 }
 
+interface MapTopologyRow {
+  topology: MapTopologySnapshot;
+}
+
+interface TrafficPlanRow {
+  route_id: string;
+  mission_id: string;
+  robot_id: string;
+  map_id: string;
+  status: TrafficPlanSnapshot["status"];
+  origin_node_id: string;
+  pickup_node_id: string;
+  dropoff_node_id: string;
+  requested_start_at: Date;
+  scheduled_start_at: Date;
+  expected_arrival_at: Date;
+  total_distance_meters: number;
+  total_wait_seconds: number;
+  segments: Array<Omit<TrafficPlanSnapshot["segments"][number], "enterAt" | "exitAt"> & {
+    enterAt: string;
+    exitAt: string;
+  }>;
+  planned_at: Date;
+  released_at: Date | null;
+}
+
+interface TrafficReservationRow {
+  reservation_id: string;
+  route_id: string;
+  mission_id: string;
+  robot_id: string;
+  map_id: string;
+  resource_id: string;
+  resource_type: TrafficReservationSnapshot["resourceType"];
+  sequence: number;
+  starts_at: Date;
+  ends_at: Date;
+  state: TrafficReservationSnapshot["state"];
+  released_at: Date | null;
+}
+
 const MISSION_COLUMNS = `
   mission_id, external_reference, priority, required_capabilities, payload_kg,
   pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
@@ -91,6 +138,18 @@ const ROBOT_COLUMNS = `
   robot_id, display_name, vendor, model, capabilities, max_payload_kg,
   allowed_zones, sequence, observed_at, connection, availability,
   battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id
+`;
+
+const TRAFFIC_PLAN_COLUMNS = `
+  route_id, mission_id, robot_id, map_id, status,
+  origin_node_id, pickup_node_id, dropoff_node_id,
+  requested_start_at, scheduled_start_at, expected_arrival_at,
+  total_distance_meters, total_wait_seconds, segments, planned_at, released_at
+`;
+
+const TRAFFIC_RESERVATION_COLUMNS = `
+  reservation_id, route_id, mission_id, robot_id, map_id,
+  resource_id, resource_type, sequence, starts_at, ends_at, state, released_at
 `;
 
 export class PostgresMissionRepository implements MissionRepository {
@@ -243,6 +302,16 @@ export class PostgresCommandRepository implements CommandRepository {
     `, [command.commandId, command.missionId, command.robotId, JSON.stringify(command), createdAt]);
   }
 
+  async updatePending(command: MissionCommand, updatedAt: Date): Promise<void> {
+    await this.database.query(`
+      UPDATE command_outbox
+      SET command_payload = $2::jsonb,
+          next_attempt_at = LEAST(next_attempt_at, $3),
+          updated_at = $3
+      WHERE command_id = $1 AND status = 'PENDING'
+    `, [command.commandId, JSON.stringify(command), updatedAt]);
+  }
+
   async claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null> {
     const result = await this.database.query<CommandRow>(`
       UPDATE command_outbox
@@ -336,6 +405,175 @@ export class PostgresCommandRepository implements CommandRepository {
   }
 }
 
+export class PostgresMapTopologyRepository implements MapTopologyRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async getById(mapId: string, options?: RepositoryReadOptions): Promise<MapTopology | null> {
+    const result = await this.database.query<MapTopologyRow>(
+      `SELECT topology FROM map_topologies WHERE map_id = $1${lockClause(options)}`,
+      [mapId],
+    );
+    return result.rows[0] ? MapTopology.restore(structuredClone(result.rows[0].topology)) : null;
+  }
+
+  async list(): Promise<MapTopology[]> {
+    const result = await this.database.query<MapTopologyRow>(
+      "SELECT topology FROM map_topologies ORDER BY map_id",
+    );
+    return result.rows.map((row) => MapTopology.restore(structuredClone(row.topology)));
+  }
+
+  async save(topology: MapTopology): Promise<void> {
+    const snapshot = topology.snapshot();
+    await this.database.query(`
+      INSERT INTO map_topologies (map_id, display_name, revision, topology, updated_at)
+      VALUES ($1, $2, $3, $4::jsonb, now())
+      ON CONFLICT (map_id) DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        revision = EXCLUDED.revision,
+        topology = EXCLUDED.topology,
+        updated_at = EXCLUDED.updated_at
+      WHERE map_topologies.revision <= EXCLUDED.revision
+    `, [snapshot.mapId, snapshot.displayName, snapshot.revision, JSON.stringify(snapshot)]);
+  }
+}
+
+export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async getByMission(missionId: string): Promise<TrafficPlanSnapshot | null> {
+    const result = await this.database.query<TrafficPlanRow>(`
+      SELECT ${TRAFFIC_PLAN_COLUMNS}
+      FROM traffic_route_plans
+      WHERE mission_id = $1
+    `, [missionId]);
+    return result.rows[0] ? this.hydratePlan(result.rows[0]) : null;
+  }
+
+  async listByMap(mapId: string): Promise<TrafficPlanSnapshot[]> {
+    const result = await this.database.query<TrafficPlanRow>(`
+      SELECT ${TRAFFIC_PLAN_COLUMNS}
+      FROM traffic_route_plans
+      WHERE map_id = $1
+      ORDER BY scheduled_start_at, route_id
+    `, [mapId]);
+    return Promise.all(result.rows.map((row) => this.hydratePlan(row)));
+  }
+
+  async listActiveReservations(
+    mapId: string,
+    after: Date,
+    excludeMissionId?: string,
+  ): Promise<TrafficReservationSnapshot[]> {
+    const result = await this.database.query<TrafficReservationRow>(`
+      SELECT ${TRAFFIC_RESERVATION_COLUMNS}
+      FROM traffic_reservations
+      WHERE map_id = $1
+        AND state = 'ACTIVE'
+        AND ends_at > $2
+        AND ($3::text IS NULL OR mission_id <> $3)
+      ORDER BY starts_at, reservation_id
+    `, [mapId, after, excludeMissionId ?? null]);
+    return result.rows.map(trafficReservationFromRow);
+  }
+
+  async save(plan: TrafficPlanSnapshot): Promise<void> {
+    await this.database.query("DELETE FROM traffic_reservations WHERE route_id = $1", [plan.routeId]);
+    await this.database.query(`
+      INSERT INTO traffic_route_plans (
+        route_id, mission_id, robot_id, map_id, status,
+        origin_node_id, pickup_node_id, dropoff_node_id,
+        requested_start_at, scheduled_start_at, expected_arrival_at,
+        total_distance_meters, total_wait_seconds, segments,
+        planned_at, released_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+        $12, $13, $14::jsonb, $15, $16, $15
+      )
+      ON CONFLICT (route_id) DO UPDATE SET
+        robot_id = EXCLUDED.robot_id,
+        map_id = EXCLUDED.map_id,
+        status = EXCLUDED.status,
+        origin_node_id = EXCLUDED.origin_node_id,
+        pickup_node_id = EXCLUDED.pickup_node_id,
+        dropoff_node_id = EXCLUDED.dropoff_node_id,
+        requested_start_at = EXCLUDED.requested_start_at,
+        scheduled_start_at = EXCLUDED.scheduled_start_at,
+        expected_arrival_at = EXCLUDED.expected_arrival_at,
+        total_distance_meters = EXCLUDED.total_distance_meters,
+        total_wait_seconds = EXCLUDED.total_wait_seconds,
+        segments = EXCLUDED.segments,
+        planned_at = EXCLUDED.planned_at,
+        released_at = EXCLUDED.released_at,
+        updated_at = EXCLUDED.updated_at
+    `, [
+      plan.routeId,
+      plan.missionId,
+      plan.robotId,
+      plan.mapId,
+      plan.status,
+      plan.originNodeId,
+      plan.pickupNodeId,
+      plan.dropoffNodeId,
+      plan.requestedStartAt,
+      plan.scheduledStartAt,
+      plan.expectedArrivalAt,
+      plan.totalDistanceMeters,
+      plan.totalWaitSeconds,
+      JSON.stringify(plan.segments),
+      plan.plannedAt,
+      plan.releasedAt,
+    ]);
+
+    for (const reservation of plan.reservations) {
+      await this.database.query(`
+        INSERT INTO traffic_reservations (
+          reservation_id, route_id, mission_id, robot_id, map_id,
+          resource_id, resource_type, sequence, starts_at, ends_at,
+          state, released_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `, [
+        reservation.reservationId,
+        reservation.routeId,
+        reservation.missionId,
+        reservation.robotId,
+        reservation.mapId,
+        reservation.resourceId,
+        reservation.resourceType,
+        reservation.sequence,
+        reservation.startsAt,
+        reservation.endsAt,
+        reservation.state,
+        reservation.releasedAt,
+      ]);
+    }
+  }
+
+  async releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null> {
+    await this.database.query(`
+      UPDATE traffic_reservations
+      SET state = 'RELEASED', released_at = $2
+      WHERE mission_id = $1 AND state = 'ACTIVE'
+    `, [missionId, releasedAt]);
+    await this.database.query(`
+      UPDATE traffic_route_plans
+      SET status = 'RELEASED', released_at = $2, updated_at = $2
+      WHERE mission_id = $1 AND status = 'ACTIVE'
+    `, [missionId, releasedAt]);
+    return this.getByMission(missionId);
+  }
+
+  private async hydratePlan(row: TrafficPlanRow): Promise<TrafficPlanSnapshot> {
+    const reservations = await this.database.query<TrafficReservationRow>(`
+      SELECT ${TRAFFIC_RESERVATION_COLUMNS}
+      FROM traffic_reservations
+      WHERE route_id = $1
+      ORDER BY sequence, reservation_id
+    `, [row.route_id]);
+    return trafficPlanFromRow(row, reservations.rows.map(trafficReservationFromRow));
+  }
+}
+
 export class PostgresAssignmentDecisionRepository implements AssignmentDecisionRepository {
   constructor(private readonly database: PostgresDatabase) {}
 
@@ -409,6 +647,52 @@ function commandFromRow(row: CommandRow): PendingCommand {
     attemptCount: row.attempt_count,
     lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
     lastError: row.last_error,
+  };
+}
+
+function trafficReservationFromRow(row: TrafficReservationRow): TrafficReservationSnapshot {
+  return {
+    reservationId: row.reservation_id,
+    routeId: row.route_id,
+    missionId: row.mission_id,
+    robotId: row.robot_id,
+    mapId: row.map_id,
+    resourceId: row.resource_id,
+    resourceType: row.resource_type,
+    sequence: row.sequence,
+    startsAt: new Date(row.starts_at),
+    endsAt: new Date(row.ends_at),
+    state: row.state,
+    releasedAt: row.released_at ? new Date(row.released_at) : null,
+  };
+}
+
+function trafficPlanFromRow(
+  row: TrafficPlanRow,
+  reservations: TrafficReservationSnapshot[],
+): TrafficPlanSnapshot {
+  return {
+    routeId: row.route_id,
+    missionId: row.mission_id,
+    robotId: row.robot_id,
+    mapId: row.map_id,
+    status: row.status,
+    originNodeId: row.origin_node_id,
+    pickupNodeId: row.pickup_node_id,
+    dropoffNodeId: row.dropoff_node_id,
+    requestedStartAt: new Date(row.requested_start_at),
+    scheduledStartAt: new Date(row.scheduled_start_at),
+    expectedArrivalAt: new Date(row.expected_arrival_at),
+    totalDistanceMeters: Number(row.total_distance_meters),
+    totalWaitSeconds: Number(row.total_wait_seconds),
+    segments: row.segments.map((segment) => ({
+      ...segment,
+      enterAt: new Date(segment.enterAt),
+      exitAt: new Date(segment.exitAt),
+    })),
+    reservations,
+    plannedAt: new Date(row.planned_at),
+    releasedAt: row.released_at ? new Date(row.released_at) : null,
   };
 }
 

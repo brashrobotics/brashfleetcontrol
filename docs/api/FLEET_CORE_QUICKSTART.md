@@ -57,6 +57,8 @@ PostgreSQL persists:
 - Every dispatch decision and candidate evaluation.
 - Pending commands, delivery attempts, and adapter receipts.
 - Mission audit events for assignment, command delivery, and execution state.
+- Versioned factory map topologies.
+- Route plans and edge/node reservation time windows.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
@@ -65,6 +67,12 @@ outbox in that same transaction. Pending commands are retried with the same
 `commandId` when Fleet Core restarts, so adapters must implement idempotent
 command handling. While Fleet Core is running, the outbox worker retries due
 commands automatically using expiring leases and exponential backoff.
+
+Dispatch also reserves the selected robot's complete graph route in the same
+transaction. If an edge or intersection is occupied, Fleet Core moves the
+complete route to the first conflict-free time slot and publishes
+`scheduledStartAt` to the adapter. PostgreSQL rejects overlapping active
+reservations even when multiple Fleet Core processes dispatch concurrently.
 
 ## Create and automatically dispatch a transport mission
 
@@ -100,6 +108,7 @@ The development simulator exposes three robots. The dispatch response includes:
 - Every rejected or eligible candidate.
 - Human-readable selection reasons.
 - The adapter command receipt.
+- The reserved route, schedule, and any conflict-induced wait.
 - The mission's current lifecycle state.
 
 ## Inspect Fleet state
@@ -107,6 +116,17 @@ The development simulator exposes three robots. The dispatch response includes:
 ```bash
 curl http://127.0.0.1:4273/api/v1/fleet/snapshot
 ```
+
+Inspect the factory traffic graph and current reservation schedule:
+
+```bash
+curl http://127.0.0.1:4273/api/v1/maps/plant-a%401/topology
+curl 'http://127.0.0.1:4273/api/v1/traffic/schedule?mapId=plant-a%401'
+curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/route
+```
+
+The operator dashboard renders the same topology and colors active/upcoming
+reserved lanes. Its traffic card shows route timing and wait duration.
 
 Select any mission row in the dashboard to open its durable event timeline, or
 query it directly:

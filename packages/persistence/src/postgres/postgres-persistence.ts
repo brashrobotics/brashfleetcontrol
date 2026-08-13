@@ -4,9 +4,11 @@ import { PostgresDatabase } from "./postgres-database.js";
 import {
   PostgresAssignmentDecisionRepository,
   PostgresCommandRepository,
+  PostgresMapTopologyRepository,
   PostgresMissionEventRepository,
   PostgresMissionRepository,
   PostgresRobotRepository,
+  PostgresTrafficPlanRepository,
 } from "./postgres-repositories.js";
 import { PostgresTransactionManager } from "./postgres-transaction-manager.js";
 
@@ -17,6 +19,8 @@ export class PostgresPersistence {
   readonly commands: PostgresCommandRepository;
   readonly decisions: PostgresAssignmentDecisionRepository;
   readonly events: PostgresMissionEventRepository;
+  readonly maps: PostgresMapTopologyRepository;
+  readonly traffic: PostgresTrafficPlanRepository;
   readonly transactions: PostgresTransactionManager;
   private readonly startupTimeoutMs: number;
 
@@ -28,6 +32,8 @@ export class PostgresPersistence {
     this.commands = new PostgresCommandRepository(this.database);
     this.decisions = new PostgresAssignmentDecisionRepository(this.database);
     this.events = new PostgresMissionEventRepository(this.database);
+    this.maps = new PostgresMapTopologyRepository(this.database);
+    this.traffic = new PostgresTrafficPlanRepository(this.database);
     this.transactions = new PostgresTransactionManager(this.database);
   }
 

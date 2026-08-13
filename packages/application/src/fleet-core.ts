@@ -5,29 +5,42 @@ import {
   type CreateMissionRequest,
   type DispatchResult,
   type FleetSnapshot,
+  type MapTopologyView,
   type MissionCommand,
   type MissionEventType,
   type MissionEventView,
   type MissionView,
   type RobotAdapterEvent,
+  type TrafficPlanView,
+  type TrafficScheduleView,
 } from "@brash/contracts";
 import {
   DomainError,
   Mission,
   Robot,
+  TrafficScheduler,
   type RobotRegistration,
   type RobotTelemetry,
+  type TrafficPlanSnapshot,
 } from "@brash/domain";
 import type { RobotAdapter, Unsubscribe } from "@brash/robot-adapter-sdk";
-import { missionToView, robotToView } from "./mappers.js";
+import {
+  missionToView,
+  robotToView,
+  topologyToView,
+  trafficPlanToView,
+  trafficReservationToView,
+} from "./mappers.js";
 import type { Clock, IdGenerator } from "./ports/platform.js";
 import type {
   AssignmentDecisionRepository,
   CommandRepository,
   MissionEventRepository,
   MissionRepository,
+  MapTopologyRepository,
   PendingCommand,
   RobotRepository,
+  TrafficPlanRepository,
   TransactionManager,
 } from "./ports/repositories.js";
 import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
@@ -38,11 +51,14 @@ export interface FleetCoreDependencies {
   commands: CommandRepository;
   decisions: AssignmentDecisionRepository;
   events: MissionEventRepository;
+  maps: MapTopologyRepository;
+  traffic: TrafficPlanRepository;
   transactions: TransactionManager;
   clock: Clock;
   ids: IdGenerator;
   adapter: RobotAdapter;
   dispatchPolicy: WeightedDispatchPolicy;
+  trafficScheduler: TrafficScheduler;
   instanceId: string;
 }
 
@@ -50,6 +66,7 @@ interface AssignmentPreparation {
   mission: Mission;
   decision: AssignmentDecision;
   command: MissionCommand | null;
+  route: TrafficPlanSnapshot | null;
 }
 
 interface CommandDeliveryResult {
@@ -172,11 +189,40 @@ export class FleetCore {
       if (mission.state !== "QUEUED") {
         throw new DomainError("MISSION_NOT_QUEUED", `Mission ${missionId} is ${mission.state}.`);
       }
-      const robots = await this.dependencies.robots.list({ forUpdate: true, skipLocked: true });
-      const decision = this.dependencies.dispatchPolicy.select(mission, robots);
+      const robots = await this.dependencies.robots.list();
+      const initialDecision = this.dependencies.dispatchPolicy.select(mission, robots);
+      let robot: Robot | null = null;
+      let selectedCandidate = null as AssignmentDecision["candidates"][number] | null;
+      for (const candidate of initialDecision.candidates.filter((entry) => entry.eligible)) {
+        const locked = await this.dependencies.robots.getById(candidate.robotId, {
+          forUpdate: true,
+          skipLocked: true,
+        });
+        if (!locked) continue;
+        const reevaluated = this.dependencies.dispatchPolicy.select(mission, [locked]).candidates[0];
+        if (!reevaluated?.eligible) continue;
+        robot = locked;
+        selectedCandidate = reevaluated;
+        break;
+      }
+      const decision: AssignmentDecision = selectedCandidate
+        ? {
+            ...initialDecision,
+            selectedRobotId: selectedCandidate.robotId,
+            selectedScore: selectedCandidate.score,
+            reasons: [...selectedCandidate.reasons],
+          }
+        : {
+            ...initialDecision,
+            selectedRobotId: null,
+            selectedScore: null,
+            reasons: initialDecision.selectedRobotId
+              ? ["Eligible robots are currently reserved by another dispatcher."]
+              : [...initialDecision.reasons],
+          };
       const now = this.dependencies.clock.now();
       await this.dependencies.decisions.save(decision, now);
-      if (!decision.selectedRobotId) {
+      if (!decision.selectedRobotId || !robot) {
         await this.appendMissionEvent(
           mission,
           "ASSIGNMENT_NOT_FOUND",
@@ -184,14 +230,32 @@ export class FleetCore {
           now,
           { reasons: decision.reasons },
         );
-        return { mission, decision, command: null };
+        return { mission, decision, command: null, route: null };
       }
 
-      const robot = await this.requireRobot(decision.selectedRobotId, true);
+      const topology = await this.requireMapTopology(mission.pickup.mapId, true);
+      const existingReservations = await this.dependencies.traffic.listActiveReservations(
+        topology.mapId,
+        now,
+      );
+      const route = this.dependencies.trafficScheduler.schedule({
+        routeId: this.dependencies.ids.next("route"),
+        missionId: mission.missionId,
+        robotId: robot.robotId,
+        topology,
+        origin: robot.pose,
+        pickup: mission.pickup,
+        dropoff: mission.dropoff,
+        requestedStartAt: new Date(now.getTime() + 5_000),
+        plannedAt: now,
+        existingReservations,
+      });
+
       robot.reserve(mission.missionId, now);
       mission.assign(robot.robotId, now);
       await this.dependencies.robots.save(robot);
       await this.dependencies.missions.save(mission);
+      await this.dependencies.traffic.save(route);
       await this.appendMissionEvent(
         mission,
         "MISSION_ASSIGNED",
@@ -199,15 +263,21 @@ export class FleetCore {
         now,
         { selectedScore: decision.selectedScore },
       );
+      await this.appendRouteReservedEvents(mission, route, now);
 
       const commandId = this.dependencies.ids.next("command");
-      const command = this.buildCommand(mission, robot.robotId, commandId, now);
+      const command = this.buildCommand(mission, robot.robotId, commandId, now, route);
       await this.dependencies.commands.enqueue(command, now);
-      return { mission, decision, command } satisfies AssignmentPreparation;
+      return { mission, decision, command, route } satisfies AssignmentPreparation;
     });
 
     if (!preparation.command) {
-      return { mission: missionToView(preparation.mission), decision: preparation.decision, receipt: null };
+      return {
+        mission: missionToView(preparation.mission),
+        decision: preparation.decision,
+        receipt: null,
+        route: null,
+      };
     }
 
     const claimed = await this.dependencies.commands.claimById(
@@ -221,6 +291,7 @@ export class FleetCore {
       mission: missionToView(delivery.mission),
       decision: preparation.decision,
       receipt: delivery.receipt,
+      route: await this.getMissionRoute(missionId),
     };
   }
 
@@ -231,6 +302,35 @@ export class FleetCore {
   async getMissionEvents(missionId: string): Promise<MissionEventView[]> {
     await this.requireMission(missionId);
     return this.dependencies.events.listByMission(missionId);
+  }
+
+  async getMissionRoute(missionId: string): Promise<TrafficPlanView | null> {
+    await this.requireMission(missionId);
+    const plan = await this.dependencies.traffic.getByMission(missionId);
+    return plan ? trafficPlanToView(plan) : null;
+  }
+
+  async getMapTopology(mapId: string): Promise<MapTopologyView> {
+    return topologyToView(await this.requireMapTopology(mapId));
+  }
+
+  async listMapTopologies(): Promise<MapTopologyView[]> {
+    return (await this.dependencies.maps.list()).map(topologyToView);
+  }
+
+  async getTrafficSchedule(mapId: string): Promise<TrafficScheduleView> {
+    await this.requireMapTopology(mapId);
+    const now = this.dependencies.clock.now();
+    const [plans, reservations] = await Promise.all([
+      this.dependencies.traffic.listByMap(mapId),
+      this.dependencies.traffic.listActiveReservations(mapId, now),
+    ]);
+    return {
+      mapId,
+      updatedAt: now.toISOString(),
+      plans: plans.map(trafficPlanToView),
+      reservations: reservations.map(trafficReservationToView),
+    };
   }
 
   async processPendingCommands(limit = 25): Promise<number> {
@@ -288,6 +388,7 @@ export class FleetCore {
         mission.complete(event.commandId, observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(mission, "MISSION_COMPLETED", "Robot completed the mission.", observedAt);
+        await this.releaseTrafficPlan(mission, observedAt, "Mission completed; traffic reservations released.");
       } else if (event.status === "FAILED") {
         if (mission.state === "FAILED") return;
         mission.fail(event.commandId, event.reason ?? "Robot reported mission failure.", observedAt);
@@ -298,12 +399,14 @@ export class FleetCore {
           event.reason ?? "Robot reported mission failure.",
           observedAt,
         );
+        await this.releaseTrafficPlan(mission, observedAt, "Mission failed; traffic reservations released.");
       } else {
         if (mission.state === "CANCELLED") return;
         if (mission.state !== "CANCELLING") mission.requestCancellation(observedAt);
         mission.cancel(event.commandId, observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(mission, "MISSION_CANCELLED", "Mission cancellation confirmed.", observedAt);
+        await this.releaseTrafficPlan(mission, observedAt, "Mission cancelled; traffic reservations released.");
       }
 
       await this.dependencies.missions.save(mission);
@@ -311,14 +414,20 @@ export class FleetCore {
     });
   }
 
-  private buildCommand(mission: Mission, robotId: string, commandId: string, now: Date): MissionCommand {
+  private buildCommand(
+    mission: Mission,
+    robotId: string,
+    commandId: string,
+    now: Date,
+    route: TrafficPlanSnapshot,
+  ): MissionCommand {
     return {
       schemaVersion: FLEET_SCHEMA_VERSION,
       commandId,
       missionId: mission.missionId,
       robotId,
       issuedAt: now.toISOString(),
-      expiresAt: new Date(now.getTime() + 30_000).toISOString(),
+      expiresAt: new Date(Math.max(now.getTime() + 30_000, route.scheduledStartAt.getTime() + 30_000)).toISOString(),
       mapId: mission.pickup.mapId,
       steps: [
         { type: "MOVE_TO", target: { ...mission.pickup } },
@@ -326,6 +435,12 @@ export class FleetCore {
         { type: "MOVE_TO", target: { ...mission.dropoff } },
         { type: "UNLOAD", stationId: mission.dropoff.stationId },
       ],
+      route: {
+        routeId: route.routeId,
+        scheduledStartAt: route.scheduledStartAt.toISOString(),
+        expectedArrivalAt: route.expectedArrivalAt.toISOString(),
+        segments: trafficPlanToView(route).segments,
+      },
     };
   }
 
@@ -334,7 +449,7 @@ export class FleetCore {
   }
 
   private async deliverCommand(pending: PendingCommand): Promise<CommandDeliveryResult> {
-    const { command } = pending;
+    const command = await this.refreshStaleRoute(pending.command);
     const attemptedAt = this.dependencies.clock.now();
     await this.dependencies.commands.recordAttempt(command.commandId, attemptedAt);
 
@@ -393,6 +508,7 @@ export class FleetCore {
           {},
           { robotId: command.robotId, commandId: command.commandId },
         );
+        await this.releaseTrafficPlan(currentMission, now, "Robot rejected the command; traffic reservations released.");
       }
 
       await this.dependencies.commands.recordReceipt(receipt);
@@ -435,6 +551,87 @@ export class FleetCore {
     });
   }
 
+  private async appendRouteReservedEvents(
+    mission: Mission,
+    route: TrafficPlanSnapshot,
+    occurredAt: Date,
+    rescheduled = false,
+  ): Promise<void> {
+    await this.appendMissionEvent(
+      mission,
+      "ROUTE_RESERVED",
+      rescheduled ? "Traffic route reservations were refreshed." : "A conflict-free traffic route was reserved.",
+      occurredAt,
+      {
+        routeId: route.routeId,
+        segments: route.segments.length,
+        distanceMeters: route.totalDistanceMeters,
+        scheduledStartAt: route.scheduledStartAt.toISOString(),
+        expectedArrivalAt: route.expectedArrivalAt.toISOString(),
+        rescheduled,
+      },
+    );
+    if (route.totalWaitSeconds > 0) {
+      await this.appendMissionEvent(
+        mission,
+        "ROUTE_DELAYED",
+        `Traffic conflicts delayed route entry by ${route.totalWaitSeconds.toFixed(1)} seconds.`,
+        occurredAt,
+        { routeId: route.routeId, waitSeconds: route.totalWaitSeconds },
+      );
+    }
+  }
+
+  private async releaseTrafficPlan(mission: Mission, releasedAt: Date, message: string): Promise<void> {
+    const current = await this.dependencies.traffic.getByMission(mission.missionId);
+    if (!current || current.status !== "ACTIVE") return;
+    const released = await this.dependencies.traffic.releaseByMission(mission.missionId, releasedAt);
+    await this.appendMissionEvent(
+      mission,
+      "ROUTE_RELEASED",
+      message,
+      releasedAt,
+      { routeId: released?.routeId ?? current.routeId },
+    );
+  }
+
+  private async refreshStaleRoute(command: MissionCommand): Promise<MissionCommand> {
+    if (!command.route) return command;
+    const now = this.dependencies.clock.now();
+    if (new Date(command.route.scheduledStartAt).getTime() > now.getTime() + 1_000) return command;
+
+    return this.dependencies.transactions.runExclusive(async () => {
+      const mission = await this.requireMission(command.missionId, true);
+      if (mission.state !== "ASSIGNED") return command;
+      const robot = await this.requireRobot(command.robotId, true);
+      const current = await this.dependencies.traffic.getByMission(mission.missionId);
+      if (!current || current.status !== "ACTIVE") return command;
+      const topology = await this.requireMapTopology(current.mapId, true);
+      const existingReservations = await this.dependencies.traffic.listActiveReservations(
+        current.mapId,
+        now,
+        mission.missionId,
+      );
+      const route = this.dependencies.trafficScheduler.schedule({
+        routeId: current.routeId,
+        missionId: mission.missionId,
+        robotId: robot.robotId,
+        topology,
+        origin: robot.pose,
+        pickup: mission.pickup,
+        dropoff: mission.dropoff,
+        requestedStartAt: new Date(now.getTime() + 5_000),
+        plannedAt: now,
+        existingReservations,
+      });
+      await this.dependencies.traffic.save(route);
+      const refreshed = this.buildCommand(mission, robot.robotId, command.commandId, now, route);
+      await this.dependencies.commands.updatePending(refreshed, now);
+      await this.appendRouteReservedEvents(mission, route, now, true);
+      return refreshed;
+    });
+  }
+
   private async requireMission(missionId: string, forUpdate = false): Promise<Mission> {
     const mission = await this.dependencies.missions.getById(missionId, { forUpdate });
     if (!mission) throw new DomainError("MISSION_NOT_FOUND", `Mission ${missionId} was not found.`);
@@ -445,6 +642,12 @@ export class FleetCore {
     const robot = await this.dependencies.robots.getById(robotId, { forUpdate });
     if (!robot) throw new DomainError("ROBOT_NOT_FOUND", `Robot ${robotId} was not found.`);
     return robot;
+  }
+
+  private async requireMapTopology(mapId: string, forUpdate = false) {
+    const topology = await this.dependencies.maps.getById(mapId, { forUpdate });
+    if (!topology) throw new DomainError("MAP_NOT_FOUND", `Map topology ${mapId} was not found.`);
+    return topology;
   }
 
   private assertStarted(): void {

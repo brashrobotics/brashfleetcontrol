@@ -1,3 +1,29 @@
+const fallbackTopology = {
+  mapId: "plant-a@1",
+  displayName: "BRASH Demo Plant · Floor 01",
+  revision: 1,
+  nodes: [
+    { nodeId: "N-WAREHOUSE-A", label: "Warehouse A", kind: "STATION", stationId: "WAREHOUSE-A", x: 10, y: 5 },
+    { nodeId: "N-NORTH-WEST", label: "North-west junction", kind: "INTERSECTION", x: 40, y: 5 },
+    { nodeId: "N-NORTH-EAST", label: "North-east junction", kind: "INTERSECTION", x: 70, y: 5 },
+    { nodeId: "N-ASSEMBLY-02", label: "Assembly 2", kind: "STATION", stationId: "ASSEMBLY-02", x: 72, y: 24 },
+    { nodeId: "N-CENTER", label: "Central crossing", kind: "INTERSECTION", x: 46, y: 24 },
+    { nodeId: "N-PRESS-A", label: "Press A", kind: "STATION", stationId: "PRESS-A", x: 30, y: 23 },
+    { nodeId: "N-SOUTH-CENTER", label: "South crossing", kind: "INTERSECTION", x: 50, y: 65 },
+    { nodeId: "N-WAREHOUSE-B", label: "Warehouse B", kind: "STATION", stationId: "WAREHOUSE-B", x: 24, y: 71 },
+    { nodeId: "N-QUALITY", label: "Quality", kind: "STATION", stationId: "QUALITY", x: 73, y: 74 },
+    { nodeId: "N-CHARGER-C-02", label: "Charger C-02", kind: "STATION", stationId: "CHARGER-C-02", x: 50, y: 84 },
+  ],
+  edges: [
+    ["E-NORTH-01", "N-WAREHOUSE-A", "N-NORTH-WEST"], ["E-NORTH-02", "N-NORTH-WEST", "N-NORTH-EAST"],
+    ["E-ASSEMBLY-IN", "N-NORTH-EAST", "N-ASSEMBLY-02"], ["E-CENTER-EAST", "N-ASSEMBLY-02", "N-CENTER"],
+    ["E-CENTER-NORTH", "N-CENTER", "N-NORTH-WEST"], ["E-PRESS-IN", "N-CENTER", "N-PRESS-A"],
+    ["E-CENTER-SOUTH", "N-CENTER", "N-SOUTH-CENTER"], ["E-WAREHOUSE-B-IN", "N-SOUTH-CENTER", "N-WAREHOUSE-B"],
+    ["E-QUALITY-IN", "N-SOUTH-CENTER", "N-QUALITY"], ["E-CHARGER-IN", "N-SOUTH-CENTER", "N-CHARGER-C-02"],
+    ["E-EAST-BYPASS", "N-ASSEMBLY-02", "N-QUALITY"],
+  ].map(([edgeId, fromNodeId, toNodeId]) => ({ edgeId, fromNodeId, toNodeId, directed: false, lengthMeters: 20, travelTimeSeconds: 18 })),
+};
+
 const fallbackState = {
   robots: [
     { id: "BR-01", name: "Atlas", x: 22, y: 38, heading: 0, battery: 82, status: "moving", mission: "M-1042", target: "Assembly 2", speed: 1.1, capabilities: ["pallet_transport"], mapId: "plant-a@1", rawPose: { x: 22, y: 38 } },
@@ -6,6 +32,8 @@ const fallbackState = {
   ],
   missions: [],
   alerts: [],
+  topology: structuredClone(fallbackTopology),
+  traffic: { mapId: "plant-a@1", plans: [], reservations: [], updatedAt: new Date().toISOString() },
 };
 
 const destinationStations = {
@@ -63,8 +91,9 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot) {
+function adaptCoreSnapshot(snapshot, topology, traffic) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
+  const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
     robots: snapshot.robots.map((robot) => {
       const mission = activeMissions.get(robot.robotId);
@@ -92,11 +121,78 @@ function adaptCoreSnapshot(snapshot) {
       status: missionStatus(mission.state),
       state: mission.state,
       progress: missionProgress(mission.state),
+      route: routesByMission.get(mission.missionId) ?? null,
       createdAt: new Date(mission.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
     })),
     alerts: snapshot.missions
       .filter((mission) => mission.state === "FAILED")
       .map((mission) => ({ id: mission.missionId, level: "critical", robot: mission.assignedRobotId ?? "FLEET", message: mission.failureReason ?? "Mission failed", time: new Date(mission.updatedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) })),
+    topology,
+    traffic,
+  };
+}
+
+function normalizePreviewSnapshot(snapshot) {
+  const traffic = buildPreviewTraffic(snapshot);
+  const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
+  return {
+    ...snapshot,
+    missions: (snapshot.missions ?? []).map((mission) => ({ ...mission, route: routesByMission.get(mission.id) ?? null })),
+    topology: snapshot.topology ?? structuredClone(fallbackTopology),
+    traffic: snapshot.traffic ?? traffic,
+  };
+}
+
+function buildPreviewTraffic(snapshot) {
+  const now = Date.now();
+  const activeMissions = (snapshot.missions ?? []).filter((mission) => mission.status === "active").slice(0, 3);
+  const edgeGroups = [
+    ["E-NORTH-01", "E-CENTER-NORTH", "E-CENTER-EAST"],
+    ["E-CENTER-EAST", "E-CENTER-SOUTH", "E-QUALITY-IN"],
+    ["E-WAREHOUSE-B-IN", "E-CENTER-SOUTH", "E-PRESS-IN"],
+  ];
+  const plans = activeMissions.map((mission, index) => {
+    const scheduled = new Date(now + 5_000 + index * 14_000);
+    const edges = edgeGroups[index % edgeGroups.length];
+    const segments = edges.map((edgeId, segmentIndex) => ({
+      sequence: segmentIndex + 1,
+      phase: segmentIndex === 0 ? "TO_PICKUP" : "TO_DROPOFF",
+      edgeId,
+      fromNodeId: "preview",
+      toNodeId: "preview",
+      lengthMeters: 20,
+      enterAt: new Date(scheduled.getTime() + segmentIndex * 18_000).toISOString(),
+      exitAt: new Date(scheduled.getTime() + (segmentIndex + 1) * 18_000).toISOString(),
+    }));
+    return {
+      routeId: `ROUTE-${mission.id}`,
+      missionId: mission.id,
+      robotId: mission.robot,
+      mapId: "plant-a@1",
+      status: "ACTIVE",
+      scheduledStartAt: scheduled.toISOString(),
+      expectedArrivalAt: new Date(scheduled.getTime() + edges.length * 18_000).toISOString(),
+      totalDistanceMeters: edges.length * 20,
+      totalWaitSeconds: index * 14,
+      segments,
+    };
+  });
+  return {
+    mapId: "plant-a@1",
+    updatedAt: new Date(now).toISOString(),
+    plans,
+    reservations: plans.flatMap((plan) => plan.segments.map((segment) => ({
+      reservationId: `${plan.routeId}:${segment.edgeId}`,
+      routeId: plan.routeId,
+      missionId: plan.missionId,
+      robotId: plan.robotId,
+      mapId: plan.mapId,
+      resourceId: `edge:${segment.edgeId}`,
+      resourceType: "EDGE",
+      startsAt: segment.enterAt,
+      endsAt: new Date(new Date(segment.exitAt).getTime() + 1_000).toISOString(),
+      state: "ACTIVE",
+    }))),
   };
 }
 
@@ -129,6 +225,87 @@ function renderRobots() {
     existing.delete(robot.id);
   }
   for (const orphan of existing.values()) orphan.remove();
+}
+
+function renderTrafficTopology() {
+  const topology = state.topology;
+  const canvas = $("#traffic-topology-canvas");
+  const nodeLayer = $("#topology-node-layer");
+  if (!topology || !canvas || !nodeLayer) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * ratio);
+  canvas.height = Math.round(rect.height * ratio);
+  const context = canvas.getContext("2d");
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, rect.width, rect.height);
+
+  const nodes = new Map(topology.nodes.map((node) => [node.nodeId, node]));
+  const reservationsByEdge = new Map();
+  for (const reservation of state.traffic?.reservations ?? []) {
+    if (reservation.state !== "ACTIVE" || reservation.resourceType !== "EDGE") continue;
+    const edgeId = reservation.resourceId.replace(/^edge:/, "");
+    const entries = reservationsByEdge.get(edgeId) ?? [];
+    entries.push(reservation);
+    reservationsByEdge.set(edgeId, entries);
+  }
+  const point = (node) => ({ x: rect.width * node.x / 100, y: rect.height * node.y / 100 });
+
+  for (const edge of topology.edges) {
+    const from = nodes.get(edge.fromNodeId);
+    const to = nodes.get(edge.toNodeId);
+    if (!from || !to) continue;
+    const start = point(from);
+    const end = point(to);
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.strokeStyle = "rgba(96, 130, 109, .52)";
+    context.lineWidth = 1;
+    context.setLineDash([4, 5]);
+    context.stroke();
+
+    const reservations = reservationsByEdge.get(edge.edgeId) ?? [];
+    if (!reservations.length) continue;
+    const isUpcoming = reservations.every((reservation) => new Date(reservation.startsAt).getTime() > Date.now());
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.strokeStyle = isUpcoming ? "rgba(242, 184, 75, .95)" : "rgba(200, 240, 61, .95)";
+    context.lineWidth = 4;
+    context.setLineDash([]);
+    context.shadowBlur = 10;
+    context.shadowColor = isUpcoming ? "rgba(242, 184, 75, .45)" : "rgba(200, 240, 61, .45)";
+    context.stroke();
+    context.shadowBlur = 0;
+  }
+
+  nodeLayer.innerHTML = topology.nodes.map((node) => `
+    <span class="topology-node ${node.kind === "STATION" ? "station-node stations" : "junction-node"}" style="--x:${Number(node.x)};--y:${Number(node.y)}" title="${escapeHtml(node.label)}">
+      <i></i>${node.kind === "STATION" ? `<b>${escapeHtml(node.label)}</b>` : ""}
+    </span>`).join("");
+}
+
+function renderTrafficSchedule() {
+  const plans = (state.traffic?.plans ?? []).filter((plan) => plan.status === "ACTIVE");
+  const reservations = (state.traffic?.reservations ?? []).filter((reservation) => reservation.state === "ACTIVE");
+  $("#active-route-count").textContent = plans.length;
+  $("#reserved-resource-count").textContent = new Set(reservations.map((reservation) => reservation.resourceId)).size;
+  $("#traffic-delay").textContent = `${Math.round(Math.max(0, ...plans.map((plan) => plan.totalWaitSeconds ?? 0)))}s`;
+  $("#traffic-plan-list").innerHTML = plans
+    .sort((left, right) => new Date(left.scheduledStartAt) - new Date(right.scheduledStartAt))
+    .slice(0, 4)
+    .map((plan) => `
+      <article class="traffic-plan ${plan.totalWaitSeconds > 0 ? "delayed" : ""}">
+        <i></i><div><strong>${escapeHtml(plan.robotId)}</strong><p>${escapeHtml(plan.routeId)}</p></div>
+        <div><time>${escapeHtml(formatShortTime(plan.scheduledStartAt))}</time><small>${plan.totalWaitSeconds > 0 ? `+${Math.round(plan.totalWaitSeconds)}s wait` : "reserved"}</small></div>
+      </article>`).join("") || '<p class="traffic-empty">No active traffic reservations.</p>';
+}
+
+function formatShortTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function selectRobot(id) {
@@ -169,8 +346,9 @@ function renderMissions() {
       <td>${escapeHtml(mission.to)}</td>
       <td><span class="status-badge ${mission.status}">${escapeHtml(mission.state ?? mission.status)}</span></td>
       <td><span class="table-progress ${mission.status}"><i style="width:${Number(mission.progress)}%"></i></span>${Math.round(mission.progress)}%</td>
+      <td><span class="traffic-slot ${mission.route?.totalWaitSeconds > 0 ? "delayed" : ""}">${mission.route ? escapeHtml(formatShortTime(mission.route.scheduledStartAt)) : "—"}</span></td>
       <td>${escapeHtml(mission.createdAt)}</td>
-    </tr>`).join("") || '<tr><td colspan="7" style="color:var(--muted)">No missions yet. Create the first transport mission.</td></tr>';
+    </tr>`).join("") || '<tr><td colspan="8" style="color:var(--muted)">No missions yet. Create the first transport mission.</td></tr>';
 }
 
 function formatEventType(type) {
@@ -231,13 +409,23 @@ function renderAll() {
   renderMissions();
   renderAlerts();
   renderKpis();
+  renderTrafficTopology();
+  renderTrafficSchedule();
   $("#last-update").textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 async function refreshCoreSnapshot() {
   const response = await fetch("/api/v1/fleet/snapshot", { cache: "no-store" });
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
-  state = adaptCoreSnapshot(await response.json());
+  const snapshot = await response.json();
+  const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
+  const [topologyResponse, scheduleResponse] = await Promise.all([
+    fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
+    fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
+  ]);
+  if (!topologyResponse.ok || !scheduleResponse.ok) throw new Error("Traffic scheduler state unavailable");
+  const [{ topology }, { schedule }] = await Promise.all([topologyResponse.json(), scheduleResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule);
   renderAll();
 }
 
@@ -254,10 +442,10 @@ async function connectFleet() {
 
     const response = await fetch("/api/fleet/snapshot");
     if (!response.ok) throw new Error("snapshot unavailable");
-    state = await response.json();
+    state = normalizePreviewSnapshot(await response.json());
     renderAll();
     const source = new EventSource("/api/fleet/stream");
-    source.addEventListener("snapshot", (event) => { state = JSON.parse(event.data); renderAll(); });
+    source.addEventListener("snapshot", (event) => { state = normalizePreviewSnapshot(JSON.parse(event.data)); renderAll(); });
     source.onerror = () => { $(".live-pill").innerHTML = "<i></i> RECONNECTING"; };
     source.onopen = () => { $(".live-pill").innerHTML = "<i></i> LIVE DEMO"; };
   } catch {
@@ -340,7 +528,10 @@ $("#close-detail").addEventListener("click", () => { $("#robot-detail").hidden =
 $$('[data-filter]').forEach((button) => button.addEventListener("click", () => { robotFilter = button.dataset.filter; $$('[data-filter]').forEach((item) => item.classList.toggle("active", item === button)); renderRobots(); }));
 $("#layers-button").addEventListener("click", () => { $("#layer-popover").hidden = !$("#layer-popover").hidden; });
 $("#close-layers").addEventListener("click", () => { $("#layer-popover").hidden = true; });
-$$('[data-layer]').forEach((checkbox) => checkbox.addEventListener("change", () => { $$(`.map-layer.${checkbox.dataset.layer}`).forEach((element) => { element.hidden = !checkbox.checked; }); }));
+$$('[data-layer]').forEach((checkbox) => checkbox.addEventListener("change", () => {
+  const selector = checkbox.dataset.layer === "stations" ? ".topology-node.stations" : `.map-layer.${checkbox.dataset.layer}`;
+  $$(selector).forEach((element) => { element.hidden = !checkbox.checked; });
+}));
 function applyZoom(next) { zoom = Math.max(.78, Math.min(1.35, next)); $("#factory-map").style.transform = `scale(${zoom})`; }
 $("#zoom-in").addEventListener("click", () => applyZoom(zoom + .1));
 $("#zoom-out").addEventListener("click", () => applyZoom(zoom - .1));
@@ -352,5 +543,6 @@ $("#notification-button").addEventListener("click", () => $(".alerts-card").scro
 $("#plant-select").addEventListener("change", (event) => showToast(`Switched to ${event.target.value}`));
 $$('.rail-item[data-view]').forEach((button) => button.addEventListener("click", () => { $$('.rail-item[data-view]').forEach((item) => item.classList.toggle("active", item === button)); const view = button.dataset.view; if (view === "missions") $("#mission-drawer").scrollIntoView({ behavior: "smooth" }); else if (view === "robots") $("#robot-detail").scrollIntoView({ behavior: "smooth" }); else if (view === "analytics") showToast("The analytics module is planned for the second release"); else $("#map-stage").scrollIntoView({ behavior: "smooth", block: "center" }); }));
 setInterval(() => { $("#clock").textContent = new Date().toLocaleTimeString("en-GB", { hour12: false }); }, 1000);
+window.addEventListener("resize", () => renderTrafficTopology());
 window.addEventListener("beforeunload", () => clearInterval(pollTimer));
 connectFleet();

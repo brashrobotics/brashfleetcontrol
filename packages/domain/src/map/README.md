@@ -6,9 +6,20 @@
 
 Defines versioned sites, floors, stations, zones, and spatial references.
 
-## Responsibilities
+## Current model
 
-Model Site, Floor, MapVersion, Station, Zone, coordinates, and publication/archival invariants.
+`MapTopology` owns one immutable-in-use graph revision. It validates unique node
+and edge identifiers, edge endpoints, positive traversal costs, and station
+bindings. It provides deterministic shortest paths and nearest-node lookup for
+coordinates that do not identify a known station.
+
+The graph includes waypoint, intersection, station, and holding-point nodes;
+edges may be one-way or bidirectional.
+
+## Future model
+
+Add Site, Building, Floor, MapVersion publication state, semantic zones, and
+coordinate-frame metadata around this traffic graph.
 
 ## Boundaries
 

@@ -2,8 +2,10 @@ import {
   FleetCore,
   RandomIdGenerator,
   SystemClock,
+  createDefaultPlantTopology,
   WeightedDispatchPolicy,
 } from "@brash/application";
+import { TrafficScheduler } from "@brash/domain";
 import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } from "@brash/contracts";
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
@@ -11,8 +13,10 @@ import {
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionRepository,
+  InMemoryMapTopologyRepository,
   InMemoryRobotRepository,
   InMemoryTransactionManager,
+  InMemoryTrafficPlanRepository,
 } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
 
@@ -60,6 +64,7 @@ export function createDevelopmentAdapter(): SimulatorAdapter {
 
 export function createDevelopmentSystem() {
   const adapter = createDevelopmentAdapter();
+  const topology = createDefaultPlantTopology();
 
   const core = new FleetCore({
     missions: new InMemoryMissionRepository(),
@@ -67,11 +72,14 @@ export function createDevelopmentSystem() {
     commands: new InMemoryCommandRepository(),
     decisions: new InMemoryAssignmentDecisionRepository(),
     events: new InMemoryMissionEventRepository(),
+    maps: new InMemoryMapTopologyRepository([topology]),
+    traffic: new InMemoryTrafficPlanRepository(),
     transactions: new InMemoryTransactionManager(),
     clock: new SystemClock(),
     ids: new RandomIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
+    trafficScheduler: new TrafficScheduler(),
     instanceId: "fleet-server-memory",
   });
 

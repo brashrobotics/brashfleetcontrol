@@ -100,6 +100,92 @@ export interface FleetSnapshot {
   missions: MissionView[];
 }
 
+export type MapNodeKind = "WAYPOINT" | "INTERSECTION" | "STATION" | "HOLDING_POINT";
+
+export interface MapNodeView {
+  nodeId: string;
+  label: string;
+  kind: MapNodeKind;
+  x: number;
+  y: number;
+  stationId?: string;
+  zoneId?: string;
+}
+
+export interface MapEdgeView {
+  edgeId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  directed: boolean;
+  lengthMeters: number;
+  travelTimeSeconds: number;
+}
+
+export interface MapTopologyView {
+  mapId: string;
+  displayName: string;
+  revision: number;
+  nodes: MapNodeView[];
+  edges: MapEdgeView[];
+}
+
+export type RoutePhase = "TO_PICKUP" | "TO_DROPOFF";
+export type TrafficPlanStatus = "ACTIVE" | "RELEASED";
+export type TrafficReservationState = "ACTIVE" | "RELEASED";
+export type TrafficResourceType = "EDGE" | "NODE";
+
+export interface TrafficRouteSegmentView {
+  sequence: number;
+  phase: RoutePhase;
+  edgeId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  lengthMeters: number;
+  enterAt: string;
+  exitAt: string;
+}
+
+export interface TrafficReservationView {
+  reservationId: string;
+  routeId: string;
+  missionId: string;
+  robotId: string;
+  mapId: string;
+  resourceId: string;
+  resourceType: TrafficResourceType;
+  sequence: number;
+  startsAt: string;
+  endsAt: string;
+  state: TrafficReservationState;
+  releasedAt: string | null;
+}
+
+export interface TrafficPlanView {
+  routeId: string;
+  missionId: string;
+  robotId: string;
+  mapId: string;
+  status: TrafficPlanStatus;
+  originNodeId: string;
+  pickupNodeId: string;
+  dropoffNodeId: string;
+  requestedStartAt: string;
+  scheduledStartAt: string;
+  expectedArrivalAt: string;
+  totalDistanceMeters: number;
+  totalWaitSeconds: number;
+  segments: TrafficRouteSegmentView[];
+  plannedAt: string;
+  releasedAt: string | null;
+}
+
+export interface TrafficScheduleView {
+  mapId: string;
+  updatedAt: string;
+  plans: TrafficPlanView[];
+  reservations: TrafficReservationView[];
+}
+
 export type MissionCommandStep =
   | { type: "MOVE_TO"; target: MissionLocation }
   | { type: "LOAD"; stationId: string; payloadKg: number }
@@ -114,6 +200,12 @@ export interface MissionCommand {
   expiresAt: string;
   mapId: string;
   steps: MissionCommandStep[];
+  route?: {
+    routeId: string;
+    scheduledStartAt: string;
+    expectedArrivalAt: string;
+    segments: TrafficRouteSegmentView[];
+  };
 }
 
 export type CommandReceiptStatus = "ACCEPTED" | "REJECTED";
@@ -168,12 +260,16 @@ export interface DispatchResult {
   mission: MissionView;
   decision: AssignmentDecision;
   receipt: CommandReceipt | null;
+  route: TrafficPlanView | null;
 }
 
 export type MissionEventType =
   | "MISSION_QUEUED"
   | "ASSIGNMENT_NOT_FOUND"
   | "MISSION_ASSIGNED"
+  | "ROUTE_RESERVED"
+  | "ROUTE_DELAYED"
+  | "ROUTE_RELEASED"
   | "COMMAND_DELIVERY_FAILED"
   | "COMMAND_DISPATCHED"
   | "COMMAND_REJECTED"

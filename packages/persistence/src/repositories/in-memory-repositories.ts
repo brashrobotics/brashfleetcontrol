@@ -4,10 +4,12 @@ import type {
   CommandRepository,
   MissionEventRepository,
   MissionRepository,
+  MapTopologyRepository,
   NewMissionEvent,
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
+  TrafficPlanRepository,
 } from "@brash/application";
 import type {
   AssignmentDecision,
@@ -15,7 +17,13 @@ import type {
   MissionCommand,
   MissionEventView,
 } from "@brash/contracts";
-import type { Mission, Robot } from "@brash/domain";
+import type {
+  MapTopology,
+  Mission,
+  Robot,
+  TrafficPlanSnapshot,
+  TrafficReservationSnapshot,
+} from "@brash/domain";
 
 export class InMemoryMissionRepository implements MissionRepository {
   private readonly missions = new Map<string, Mission>();
@@ -83,6 +91,13 @@ export class InMemoryCommandRepository implements CommandRepository {
       leaseOwner: null,
       leaseExpiresAt: null,
     });
+  }
+
+  async updatePending(command: MissionCommand, updatedAt: Date): Promise<void> {
+    const entry = this.require(command.commandId);
+    if (entry.receipt) return;
+    entry.command = structuredClone(command);
+    entry.nextAttemptAt = new Date(Math.min(entry.nextAttemptAt.getTime(), updatedAt.getTime()));
   }
 
   async claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null> {
@@ -164,6 +179,80 @@ export class InMemoryCommandRepository implements CommandRepository {
   }
 }
 
+export class InMemoryMapTopologyRepository implements MapTopologyRepository {
+  private readonly topologies = new Map<string, MapTopology>();
+
+  constructor(initial: MapTopology[] = []) {
+    for (const topology of initial) this.topologies.set(topology.mapId, topology);
+  }
+
+  async getById(mapId: string, _options?: RepositoryReadOptions): Promise<MapTopology | null> {
+    return this.topologies.get(mapId) ?? null;
+  }
+
+  async list(): Promise<MapTopology[]> {
+    return [...this.topologies.values()].sort((left, right) => left.mapId.localeCompare(right.mapId));
+  }
+
+  async save(topology: MapTopology): Promise<void> {
+    this.topologies.set(topology.mapId, topology);
+  }
+}
+
+export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
+  private readonly plans = new Map<string, TrafficPlanSnapshot>();
+
+  async getByMission(missionId: string): Promise<TrafficPlanSnapshot | null> {
+    const plan = [...this.plans.values()].find((candidate) => candidate.missionId === missionId);
+    return plan ? cloneTrafficPlan(plan) : null;
+  }
+
+  async listByMap(mapId: string): Promise<TrafficPlanSnapshot[]> {
+    return [...this.plans.values()]
+      .filter((plan) => plan.mapId === mapId)
+      .sort((left, right) => left.scheduledStartAt.getTime() - right.scheduledStartAt.getTime() || left.routeId.localeCompare(right.routeId))
+      .map(cloneTrafficPlan);
+  }
+
+  async listActiveReservations(
+    mapId: string,
+    after: Date,
+    excludeMissionId?: string,
+  ): Promise<TrafficReservationSnapshot[]> {
+    return [...this.plans.values()]
+      .flatMap((plan) => plan.reservations)
+      .filter((reservation) => reservation.mapId === mapId
+        && reservation.state === "ACTIVE"
+        && reservation.endsAt.getTime() > after.getTime()
+        && reservation.missionId !== excludeMissionId)
+      .sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime() || left.reservationId.localeCompare(right.reservationId))
+      .map(cloneTrafficReservation);
+  }
+
+  async save(plan: TrafficPlanSnapshot): Promise<void> {
+    this.plans.set(plan.routeId, cloneTrafficPlan(plan));
+  }
+
+  async releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null> {
+    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    if (!entry) return null;
+    const [routeId, plan] = entry;
+    if (plan.status === "RELEASED") return cloneTrafficPlan(plan);
+    const released: TrafficPlanSnapshot = {
+      ...cloneTrafficPlan(plan),
+      status: "RELEASED",
+      releasedAt: new Date(releasedAt),
+      reservations: plan.reservations.map((reservation) => ({
+        ...cloneTrafficReservation(reservation),
+        state: "RELEASED",
+        releasedAt: new Date(releasedAt),
+      })),
+    };
+    this.plans.set(routeId, released);
+    return cloneTrafficPlan(released);
+  }
+}
+
 export class InMemoryAssignmentDecisionRepository implements AssignmentDecisionRepository {
   private readonly decisions: Array<{ decision: AssignmentDecision; decidedAt: Date }> = [];
 
@@ -202,4 +291,30 @@ export class InMemoryMissionEventRepository implements MissionEventRepository {
       .filter((event) => event.missionId === missionId)
       .map((event) => structuredClone(event));
   }
+}
+
+function cloneTrafficReservation(reservation: TrafficReservationSnapshot): TrafficReservationSnapshot {
+  return {
+    ...reservation,
+    startsAt: new Date(reservation.startsAt),
+    endsAt: new Date(reservation.endsAt),
+    releasedAt: reservation.releasedAt ? new Date(reservation.releasedAt) : null,
+  };
+}
+
+function cloneTrafficPlan(plan: TrafficPlanSnapshot): TrafficPlanSnapshot {
+  return {
+    ...plan,
+    requestedStartAt: new Date(plan.requestedStartAt),
+    scheduledStartAt: new Date(plan.scheduledStartAt),
+    expectedArrivalAt: new Date(plan.expectedArrivalAt),
+    segments: plan.segments.map((segment) => ({
+      ...segment,
+      enterAt: new Date(segment.enterAt),
+      exitAt: new Date(segment.exitAt),
+    })),
+    reservations: plan.reservations.map(cloneTrafficReservation),
+    plannedAt: new Date(plan.plannedAt),
+    releasedAt: plan.releasedAt ? new Date(plan.releasedAt) : null,
+  };
 }
