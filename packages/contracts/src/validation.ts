@@ -1,4 +1,4 @@
-import type { AlarmActionRequest, CreateMissionRequest, MissionLocation } from "./fleet-contracts.js";
+import type { AlarmActionRequest, CreateMissionRequest, CreateTrafficRestrictionRequest, MissionLocation } from "./fleet-contracts.js";
 
 export class ContractValidationError extends Error {
   readonly issues: string[];
@@ -106,4 +106,16 @@ export function parseAlarmActionRequest(value: unknown): AlarmActionRequest {
   const note = value.note === undefined ? undefined : nonEmptyString(value.note, "note", issues);
   if (issues.length > 0) throw new ContractValidationError(issues);
   return { operatorId, ...(note ? { note } : {}) };
+}
+
+export function parseCreateTrafficRestrictionRequest(value: unknown): CreateTrafficRestrictionRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const mapId = nonEmptyString(value.mapId, "mapId", issues);
+  const resourceId = nonEmptyString(value.resourceId, "resourceId", issues);
+  if (resourceId && !/^(edge|node):[^:]+$/.test(resourceId)) issues.push("resourceId must use edge:ID or node:ID format.");
+  const reason = nonEmptyString(value.reason, "reason", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { mapId, resourceId, reason, operatorId };
 }

@@ -65,6 +65,7 @@ export interface ScheduleTrafficInput {
   requestedStartAt: Date;
   plannedAt: Date;
   existingReservations: TrafficReservationSnapshot[];
+  excludedResourceIds?: string[];
 }
 
 export interface TrafficSchedulerOptions {
@@ -105,9 +106,15 @@ export class TrafficScheduler {
     const originNode = input.topology.nearestNode(input.origin);
     const pickupNode = input.topology.nodeForLocation(input.pickup);
     const dropoffNode = input.topology.nodeForLocation(input.dropoff);
+    const excludedEdges = new Set((input.excludedResourceIds ?? []).filter((id) => id.startsWith("edge:")).map((id) => id.slice(5)));
+    const excludedNodes = new Set((input.excludedResourceIds ?? []).filter((id) => id.startsWith("node:")).map((id) => id.slice(5)));
+    if (excludedNodes.has(originNode.nodeId) || excludedNodes.has(pickupNode.nodeId) || excludedNodes.has(dropoffNode.nodeId)) {
+      throw new DomainError("TRAFFIC_REQUIRED_NODE_CLOSED", "A required origin, pickup, or drop-off node is closed.");
+    }
+    const pathConstraints = { excludedEdgeIds: excludedEdges, excludedNodeIds: excludedNodes };
     const traversals: PhasedTraversal[] = [
-      ...input.topology.shortestPath(originNode.nodeId, pickupNode.nodeId).map((step) => ({ ...step, phase: "TO_PICKUP" as const })),
-      ...input.topology.shortestPath(pickupNode.nodeId, dropoffNode.nodeId).map((step) => ({ ...step, phase: "TO_DROPOFF" as const })),
+      ...input.topology.shortestPath(originNode.nodeId, pickupNode.nodeId, pathConstraints).map((step) => ({ ...step, phase: "TO_PICKUP" as const })),
+      ...input.topology.shortestPath(pickupNode.nodeId, dropoffNode.nodeId, pathConstraints).map((step) => ({ ...step, phase: "TO_DROPOFF" as const })),
     ];
 
     let scheduledStartAt = new Date(input.requestedStartAt);

@@ -28,6 +28,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       events: persistence.events,
       maps: persistence.maps,
       traffic: persistence.traffic,
+      trafficRestrictions: persistence.trafficRestrictions,
       transactions: persistence.transactions,
       clock: new SystemClock(),
       ids: new RandomIdGenerator(),

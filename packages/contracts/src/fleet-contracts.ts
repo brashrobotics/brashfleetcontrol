@@ -164,6 +164,27 @@ export interface AlarmActionRequest {
   note?: string;
 }
 
+export type TrafficRestrictionStatus = "ACTIVE" | "CLEARED";
+
+export interface TrafficRestrictionView {
+  restrictionId: string;
+  mapId: string;
+  resourceId: string;
+  status: TrafficRestrictionStatus;
+  reason: string;
+  createdBy: string;
+  createdAt: string;
+  clearedBy: string | null;
+  clearedAt: string | null;
+}
+
+export interface CreateTrafficRestrictionRequest {
+  mapId: string;
+  resourceId: string;
+  reason: string;
+  operatorId: string;
+}
+
 export type MapNodeKind = "WAYPOINT" | "INTERSECTION" | "STATION" | "HOLDING_POINT";
 
 export interface MapNodeView {

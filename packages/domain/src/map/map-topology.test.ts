@@ -34,3 +34,24 @@ test("map topology rejects an edge that references an unknown node", () => {
     edges: [{ edgeId: "E", fromNodeId: "A", toNodeId: "MISSING", directed: false, lengthMeters: 1, travelTimeSeconds: 1 }],
   }), (error) => error instanceof DomainError && error.code === "MAP_EDGE_NODE_UNKNOWN");
 });
+
+test("map topology reroutes around an excluded edge", () => {
+  const topology = MapTopology.create({
+    mapId: "reroute@1", displayName: "Reroute", revision: 1,
+    nodes: [
+      { nodeId: "A", label: "A", kind: "WAYPOINT", x: 0, y: 0 },
+      { nodeId: "B", label: "B", kind: "WAYPOINT", x: 5, y: 0 },
+      { nodeId: "C", label: "C", kind: "WAYPOINT", x: 5, y: 5 },
+      { nodeId: "D", label: "D", kind: "WAYPOINT", x: 10, y: 0 },
+    ],
+    edges: [
+      { edgeId: "E-AB", fromNodeId: "A", toNodeId: "B", directed: false, lengthMeters: 5, travelTimeSeconds: 5 },
+      { edgeId: "E-BD", fromNodeId: "B", toNodeId: "D", directed: false, lengthMeters: 5, travelTimeSeconds: 5 },
+      { edgeId: "E-AC", fromNodeId: "A", toNodeId: "C", directed: false, lengthMeters: 7, travelTimeSeconds: 7 },
+      { edgeId: "E-CD", fromNodeId: "C", toNodeId: "D", directed: false, lengthMeters: 7, travelTimeSeconds: 7 },
+    ],
+  });
+  const direct = topology.shortestPath("A", "D");
+  const rerouted = topology.shortestPath("A", "D", { excludedEdgeIds: new Set(["E-AB"]) });
+  assert.notEqual(rerouted[0].edgeId, direct[0].edgeId);
+});

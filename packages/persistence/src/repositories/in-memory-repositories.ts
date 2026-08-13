@@ -17,6 +17,8 @@ import type {
   RobotRepository,
   RaiseAlarmInput,
   TrafficPlanRepository,
+  TrafficRestrictionRecord,
+  TrafficRestrictionRepository,
 } from "@brash/application";
 import type {
   AlarmStatus,
@@ -107,6 +109,43 @@ function cloneAlarm(alarm: AlarmRecord): AlarmRecord {
 
 function severityRank(severity: "INFO" | "WARNING" | "CRITICAL"): number {
   return ({ INFO: 1, WARNING: 2, CRITICAL: 3 })[severity];
+}
+
+export class InMemoryTrafficRestrictionRepository implements TrafficRestrictionRepository {
+  private readonly restrictions = new Map<string, TrafficRestrictionRecord>();
+  private nextId = 0;
+
+  async create(mapId: string, resourceId: string, reason: string, operatorId: string, at: Date): Promise<TrafficRestrictionRecord> {
+    const duplicate = [...this.restrictions.values()].find((entry) => entry.mapId === mapId && entry.resourceId === resourceId && entry.status === "ACTIVE");
+    if (duplicate) return cloneRestriction(duplicate);
+    const restriction: TrafficRestrictionRecord = {
+      restrictionId: `RESTRICTION-${String(++this.nextId).padStart(4, "0")}`,
+      mapId, resourceId, reason, status: "ACTIVE", createdBy: operatorId,
+      createdAt: new Date(at), clearedBy: null, clearedAt: null,
+    };
+    this.restrictions.set(restriction.restrictionId, restriction);
+    return cloneRestriction(restriction);
+  }
+
+  async listActive(mapId: string): Promise<TrafficRestrictionRecord[]> {
+    return [...this.restrictions.values()]
+      .filter((entry) => entry.mapId === mapId && entry.status === "ACTIVE")
+      .sort((left, right) => left.resourceId.localeCompare(right.resourceId))
+      .map(cloneRestriction);
+  }
+
+  async clear(restrictionId: string, operatorId: string, at: Date): Promise<TrafficRestrictionRecord | null> {
+    const restriction = this.restrictions.get(restrictionId);
+    if (!restriction || restriction.status === "CLEARED") return null;
+    restriction.status = "CLEARED";
+    restriction.clearedBy = operatorId;
+    restriction.clearedAt = new Date(at);
+    return cloneRestriction(restriction);
+  }
+}
+
+function cloneRestriction(record: TrafficRestrictionRecord): TrafficRestrictionRecord {
+  return { ...record, createdAt: new Date(record.createdAt), clearedAt: record.clearedAt ? new Date(record.clearedAt) : null };
 }
 import type {
   MapTopology,

@@ -11,6 +11,7 @@ import {
   PostgresMissionRepository,
   PostgresRobotRepository,
   PostgresTrafficPlanRepository,
+  PostgresTrafficRestrictionRepository,
 } from "./postgres-repositories.js";
 import { PostgresTransactionManager } from "./postgres-transaction-manager.js";
 
@@ -25,6 +26,7 @@ export class PostgresPersistence {
   readonly events: PostgresMissionEventRepository;
   readonly maps: PostgresMapTopologyRepository;
   readonly traffic: PostgresTrafficPlanRepository;
+  readonly trafficRestrictions: PostgresTrafficRestrictionRepository;
   readonly transactions: PostgresTransactionManager;
   private readonly startupTimeoutMs: number;
 
@@ -40,6 +42,7 @@ export class PostgresPersistence {
     this.events = new PostgresMissionEventRepository(this.database);
     this.maps = new PostgresMapTopologyRepository(this.database);
     this.traffic = new PostgresTrafficPlanRepository(this.database);
+    this.trafficRestrictions = new PostgresTrafficRestrictionRepository(this.database);
     this.transactions = new PostgresTransactionManager(this.database);
   }
 

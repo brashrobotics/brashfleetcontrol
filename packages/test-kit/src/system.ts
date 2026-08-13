@@ -13,6 +13,7 @@ import {
   InMemoryRobotRepository,
   InMemoryTransactionManager,
   InMemoryTrafficPlanRepository,
+  InMemoryTrafficRestrictionRepository,
 } from "@brash/persistence";
 import { ManualClock, SequentialIdGenerator } from "./fakes.js";
 import { robotFixture } from "./fixtures.js";
@@ -56,6 +57,7 @@ export function createTestFleetSystem(options: {
   const events = new InMemoryMissionEventRepository();
   const maps = new InMemoryMapTopologyRepository([createDefaultPlantTopology()]);
   const traffic = new InMemoryTrafficPlanRepository();
+  const trafficRestrictions = new InMemoryTrafficRestrictionRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     alarms,
@@ -67,6 +69,7 @@ export function createTestFleetSystem(options: {
     events,
     maps,
     traffic,
+    trafficRestrictions,
     transactions,
     clock,
     ids,
@@ -77,5 +80,5 @@ export function createTestFleetSystem(options: {
     instanceId: "test-fleet-core",
   }, options.coreOptions);
 
-  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, decisions, events, maps, traffic, transactions };
+  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, decisions, events, maps, traffic, trafficRestrictions, transactions };
 }

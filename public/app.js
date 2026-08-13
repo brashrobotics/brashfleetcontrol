@@ -34,6 +34,7 @@ const fallbackState = {
   alerts: [],
   topology: structuredClone(fallbackTopology),
   traffic: { mapId: "plant-a@1", plans: [], reservations: [], updatedAt: new Date().toISOString() },
+  restrictions: [],
   recovery: { degradedRobots: 0, offlineRobots: 0, recoveryRequiredMissions: 0, safetyHolds: 0, nextLeaseExpiryAt: null },
   queue: { pendingMissions: 0, dueMissions: 0, leasedMissions: 0, nextAttemptAt: null, entries: [] },
   alarmSummary: { open: 0, acknowledged: 0, critical: 0, warning: 0, alarms: [] },
@@ -96,7 +97,7 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic, recovery, queue, alarmSummary) {
+function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, recovery, queue, alarmSummary) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -143,6 +144,7 @@ function adaptCoreSnapshot(snapshot, topology, traffic, recovery, queue, alarmSu
     })),
     topology,
     traffic,
+    restrictions,
     recovery,
     queue,
     alarmSummary,
@@ -157,6 +159,7 @@ function normalizePreviewSnapshot(snapshot) {
     missions: (snapshot.missions ?? []).map((mission) => ({ ...mission, route: routesByMission.get(mission.id) ?? null })),
     topology: snapshot.topology ?? structuredClone(fallbackTopology),
     traffic: snapshot.traffic ?? traffic,
+    restrictions: snapshot.restrictions ?? [],
     recovery: snapshot.recovery ?? fallbackState.recovery,
     queue: snapshot.queue ?? fallbackState.queue,
     alarmSummary: snapshot.alarmSummary ?? fallbackState.alarmSummary,
@@ -263,6 +266,7 @@ function renderTrafficTopology() {
 
   const nodes = new Map(topology.nodes.map((node) => [node.nodeId, node]));
   const reservationsByEdge = new Map();
+  const restrictedResources = new Set((state.restrictions ?? []).map((restriction) => restriction.resourceId));
   for (const reservation of state.traffic?.reservations ?? []) {
     if (!["ACTIVE", "SAFETY_HOLD"].includes(reservation.state) || reservation.resourceType !== "EDGE") continue;
     const edgeId = reservation.resourceId.replace(/^edge:/, "");
@@ -281,13 +285,17 @@ function renderTrafficTopology() {
     context.beginPath();
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
-    context.strokeStyle = "rgba(96, 130, 109, .52)";
-    context.lineWidth = 1;
-    context.setLineDash([4, 5]);
+    const isRestricted = restrictedResources.has(`edge:${edge.edgeId}`);
+    context.strokeStyle = isRestricted ? "rgba(255, 105, 95, .98)" : "rgba(96, 130, 109, .52)";
+    context.lineWidth = isRestricted ? 4 : 1;
+    context.setLineDash(isRestricted ? [9, 5] : [4, 5]);
+    context.shadowBlur = isRestricted ? 10 : 0;
+    context.shadowColor = "rgba(255, 105, 95, .55)";
     context.stroke();
+    context.shadowBlur = 0;
 
     const reservations = reservationsByEdge.get(edge.edgeId) ?? [];
-    if (!reservations.length) continue;
+    if (!reservations.length || isRestricted) continue;
     const isSafetyHold = reservations.some((reservation) => reservation.state === "SAFETY_HOLD");
     const isUpcoming = reservations.every((reservation) => new Date(reservation.startsAt).getTime() > Date.now());
     context.beginPath();
@@ -303,7 +311,7 @@ function renderTrafficTopology() {
   }
 
   nodeLayer.innerHTML = topology.nodes.map((node) => `
-    <span class="topology-node ${node.kind === "STATION" ? "station-node stations" : "junction-node"}" style="--x:${Number(node.x)};--y:${Number(node.y)}" title="${escapeHtml(node.label)}">
+    <span class="topology-node ${node.kind === "STATION" ? "station-node stations" : "junction-node"} ${restrictedResources.has(`node:${node.nodeId}`) ? "restricted-node" : ""}" style="--x:${Number(node.x)};--y:${Number(node.y)}" title="${escapeHtml(node.label)}">
       <i></i>${node.kind === "STATION" ? `<b>${escapeHtml(node.label)}</b>` : ""}
     </span>`).join("");
 }
@@ -323,6 +331,27 @@ function renderTrafficSchedule() {
         <i></i><div><strong>${escapeHtml(plan.robotId)}</strong><p>${escapeHtml(plan.routeId)}</p></div>
         <div><time>${escapeHtml(formatShortTime(plan.scheduledStartAt))}</time><small>${plan.status === "SAFETY_HOLD" ? "SAFETY HOLD" : plan.totalWaitSeconds > 0 ? `+${Math.round(plan.totalWaitSeconds)}s wait` : "reserved"}</small></div>
       </article>`).join("") || '<p class="traffic-empty">No active traffic reservations.</p>';
+}
+
+function renderTrafficRestrictions() {
+  const restrictions = state.restrictions ?? [];
+  const resourceSelect = $("#restriction-resource");
+  const selectedResource = resourceSelect.value;
+  const resources = [
+    ...(state.topology?.edges ?? []).map((edge) => ({ value: `edge:${edge.edgeId}`, label: `Lane · ${edge.edgeId}` })),
+    ...(state.topology?.nodes ?? []).map((node) => ({ value: `node:${node.nodeId}`, label: `${node.kind === "STATION" ? "Station" : "Junction"} · ${node.label}` })),
+  ];
+  const active = new Set(restrictions.map((restriction) => restriction.resourceId));
+  const available = resources.filter((resource) => !active.has(resource.value));
+  resourceSelect.innerHTML = available.map((resource) => `<option value="${escapeHtml(resource.value)}">${escapeHtml(resource.label)}</option>`).join("");
+  if (available.some((resource) => resource.value === selectedResource)) resourceSelect.value = selectedResource;
+  $("#close-resource-button").disabled = fleetMode !== "core" || !available.length;
+  $("#restriction-count").textContent = restrictions.length;
+  $("#traffic-restriction-list").innerHTML = restrictions.map((restriction) => `
+    <article class="traffic-restriction">
+      <i></i><div><strong>${escapeHtml(restriction.resourceId)}</strong><p>${escapeHtml(restriction.reason)}</p><small>${escapeHtml(restriction.createdBy)} · ${escapeHtml(formatAge(restriction.createdAt))}</small></div>
+      ${fleetMode === "core" ? `<button data-clear-restriction="${escapeHtml(restriction.restrictionId)}">Reopen</button>` : ""}
+    </article>`).join("") || '<p class="traffic-empty">No operator closures.</p>';
 }
 
 function formatShortTime(value) {
@@ -460,6 +489,7 @@ function renderAll() {
   renderKpis();
   renderTrafficTopology();
   renderTrafficSchedule();
+  renderTrafficRestrictions();
   $("#last-update").textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
@@ -468,16 +498,17 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse, recoveryResponse, queueResponse, alarmResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, restrictionResponse, recoveryResponse, queueResponse, alarmResponse] = await Promise.all([
     fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
+    fetch(`/api/v1/traffic/restrictions?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
     fetch("/api/v1/recovery/status", { cache: "no-store" }),
     fetch("/api/v1/dispatch/queue", { cache: "no-store" }),
     fetch("/api/v1/alarms", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok) throw new Error("Fleet coordination state unavailable");
-  const [{ topology }, { schedule }, { recovery }, { queue }, { summary }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule, recovery, queue, summary);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { restrictions }, { recovery }, { queue }, { summary }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, recovery, queue, summary);
   renderAll();
 }
 
@@ -617,6 +648,43 @@ $("#alert-list").addEventListener("click", async (event) => {
       note: "Acknowledged from the Fleet Management dashboard",
     });
     showToast(`${button.dataset.ackAlarm} acknowledged`);
+    await refreshCoreSnapshot();
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
+  }
+});
+$("#close-resource-button").addEventListener("click", async () => {
+  if (fleetMode !== "core") return showToast("Traffic controls require Fleet Core");
+  const resourceId = $("#restriction-resource").value;
+  const reason = $("#restriction-reason").value.trim();
+  if (!resourceId || !reason) return showToast("Select a resource and enter a closure reason");
+  const button = $("#close-resource-button");
+  button.disabled = true;
+  try {
+    await post("/api/v1/traffic/restrictions", {
+      mapId: state.topology.mapId,
+      resourceId,
+      reason,
+      operatorId: "dashboard-operator",
+    });
+    $("#restriction-reason").value = "";
+    showToast(`${resourceId} closed for new routes`);
+    await refreshCoreSnapshot();
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
+  }
+});
+$("#traffic-restriction-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-clear-restriction]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await post(`/api/v1/traffic/restrictions/${encodeURIComponent(button.dataset.clearRestriction)}/clear`, {
+      operatorId: "dashboard-operator",
+    });
+    showToast("Traffic resource reopened");
     await refreshCoreSnapshot();
   } catch (error) {
     button.disabled = false;

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.7.0
-  description: Vendor-independent mission queue, alarms, traffic reservation, robot liveness, recovery, and operator control API.
+  version: 0.8.0
+  description: Vendor-independent mission queue, alarms, dynamic traffic restrictions, robot liveness, recovery, and operator control API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -135,6 +135,76 @@ paths:
                   schedule: { $ref: "#/components/schemas/TrafficSchedule" }
         "400":
           $ref: "#/components/responses/BadRequest"
+  /api/v1/traffic/restrictions:
+    get:
+      operationId: listTrafficRestrictions
+      parameters:
+        - name: mapId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Active edge and node closures for a map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restrictions]
+                properties:
+                  restrictions:
+                    type: array
+                    items: { $ref: "#/components/schemas/TrafficRestriction" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      operationId: createTrafficRestriction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTrafficRestrictionRequest" }
+      responses:
+        "201":
+          description: Resource closed for future route planning
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restriction]
+                properties:
+                  restriction: { $ref: "#/components/schemas/TrafficRestriction" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/traffic/restrictions/{restrictionId}/clear:
+    parameters:
+      - name: restrictionId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1 }
+    post:
+      operationId: clearTrafficRestriction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlarmActionRequest" }
+      responses:
+        "200":
+          description: Resource reopened for route planning
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restriction]
+                properties:
+                  restriction: { $ref: "#/components/schemas/TrafficRestriction" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/recovery/status:
     get:
       operationId: getFleetRecoveryStatus
@@ -534,6 +604,32 @@ components:
         reservations:
           type: array
           items: { $ref: "#/components/schemas/TrafficReservation" }
+    CreateTrafficRestrictionRequest:
+      type: object
+      additionalProperties: false
+      required: [mapId, resourceId, reason, operatorId]
+      properties:
+        mapId: { type: string, minLength: 1 }
+        resourceId:
+          type: string
+          pattern: "^(edge|node):.+$"
+          description: Canonical traffic resource identifier such as edge:E-NORTH-02.
+        reason: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+    TrafficRestriction:
+      type: object
+      additionalProperties: false
+      required: [restrictionId, mapId, resourceId, status, reason, createdBy, createdAt, clearedBy, clearedAt]
+      properties:
+        restrictionId: { type: string }
+        mapId: { type: string }
+        resourceId: { type: string, pattern: "^(edge|node):.+$" }
+        status: { type: string, enum: [ACTIVE, CLEARED] }
+        reason: { type: string }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        clearedBy: { type: [string, "null"] }
+        clearedAt: { type: [string, "null"], format: date-time }
     FleetRecoveryStatus:
       type: object
       additionalProperties: false

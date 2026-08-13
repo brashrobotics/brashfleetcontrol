@@ -16,6 +16,7 @@ import {
   InMemoryRobotRepository,
   InMemoryTransactionManager,
   InMemoryTrafficPlanRepository,
+  InMemoryTrafficRestrictionRepository,
 } from "@brash/persistence";
 import {
   ManualClock,
@@ -62,6 +63,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     events: new InMemoryMissionEventRepository(),
     maps: new InMemoryMapTopologyRepository([createDefaultPlantTopology()]),
     traffic: new InMemoryTrafficPlanRepository(),
+    trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
@@ -105,6 +107,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
     events: new InMemoryMissionEventRepository(),
     maps: new InMemoryMapTopologyRepository([createDefaultPlantTopology()]),
     traffic: new InMemoryTrafficPlanRepository(),
+    trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),
@@ -152,6 +155,7 @@ test("startup reconciliation does not overwrite a durable reservation with stale
     events: new InMemoryMissionEventRepository(),
     maps: new InMemoryMapTopologyRepository([createDefaultPlantTopology()]),
     traffic: new InMemoryTrafficPlanRepository(),
+    trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     transactions: new InMemoryTransactionManager(),
     clock,
     ids: new SequentialIdGenerator(),

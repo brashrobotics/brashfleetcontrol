@@ -19,6 +19,12 @@ Coordinates planned use of shared factory space and infrastructure resources.
 - Renews route leases while the assigned robot remains healthy.
 - Converts active reservations to non-expiring safety holds when heartbeat
   expiry makes the robot's physical position uncertain.
+- Persists operator edge/node closures and excludes them from shortest-path
+  calculation for every new dispatch and route refresh.
+- Raises a critical, deduplicated alarm if a new closure intersects an active
+  route, without pretending that an already-issued robot command was revoked.
+- Exposes closure create/list/clear controls through both `/api/v1` and the
+  Fleet Management dashboard.
 
 The full-route policy is deliberately conservative: because a mission owns its
 complete path before dispatch, it cannot enter a hold-and-wait cycle with
@@ -28,7 +34,7 @@ current graph model.
 ## Next responsibilities
 
 Add priority preemption, rolling-horizon planning, infrastructure reservations,
-operator recovery controls, and topology-aware rerouting.
+and operator recovery controls for active-route closures.
 
 ## Boundaries
 

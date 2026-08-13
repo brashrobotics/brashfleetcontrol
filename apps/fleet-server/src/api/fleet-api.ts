@@ -1,4 +1,4 @@
-import { ContractValidationError, parseAlarmActionRequest, parseCreateMissionRequest } from "@brash/contracts";
+import { ContractValidationError, parseAlarmActionRequest, parseCreateMissionRequest, parseCreateTrafficRestrictionRequest } from "@brash/contracts";
 import { DomainError } from "@brash/domain";
 import type { FleetCore } from "@brash/application";
 
@@ -67,6 +67,23 @@ export class FleetApi {
           return json({ error: { code: "MAP_ID_REQUIRED", message: "The mapId query parameter is required." } }, 400);
         }
         return json({ schedule: await this.core.getTrafficSchedule(mapId) });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/traffic/restrictions") {
+        const mapId = url.searchParams.get("mapId");
+        if (!mapId) return json({ error: { code: "MAP_ID_REQUIRED", message: "The mapId query parameter is required." } }, 400);
+        return json({ restrictions: await this.core.listTrafficRestrictions(mapId) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/v1/traffic/restrictions") {
+        const input = parseCreateTrafficRestrictionRequest(await request.json());
+        return json({ restriction: await this.core.createTrafficRestriction(input) }, 201);
+      }
+
+      const clearRestrictionMatch = url.pathname.match(/^\/api\/v1\/traffic\/restrictions\/([^/]+)\/clear$/);
+      if (request.method === "POST" && clearRestrictionMatch) {
+        const input = parseAlarmActionRequest(await request.json());
+        return json({ restriction: await this.core.clearTrafficRestriction(decodeURIComponent(clearRestrictionMatch[1]), input.operatorId) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/v1/recovery/status") {

@@ -97,7 +97,7 @@
                 <label><input type="checkbox" data-layer="robots" checked /> Robot labels</label>
               </div>
             </div>
-            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend reserved"></i> Reserved lane</span><span><i class="legend delayed"></i> Scheduled wait</span><span><i class="legend safety-hold"></i> Safety hold</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
+            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend reserved"></i> Reserved lane</span><span><i class="legend delayed"></i> Scheduled wait</span><span><i class="legend safety-hold"></i> Safety hold</span><span><i class="legend restricted"></i> Closed</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
           </article>
 
           <aside class="detail-stack">
@@ -121,8 +121,10 @@
 
             <article class="traffic-card panel">
               <div class="small-panel-title"><div><span class="section-index">04</span><h2>Traffic schedule</h2></div><span class="scheduler-state"><i></i> DEADLOCK SAFE</span></div>
-              <div class="traffic-metrics"><div><strong id="active-route-count">0</strong><span>ACTIVE ROUTES</span></div><div><strong id="reserved-resource-count">0</strong><span>RESOURCES</span></div><div><strong id="traffic-hold-count">0</strong><span>SAFETY HOLDS</span></div></div>
+              <div class="traffic-metrics"><div><strong id="active-route-count">0</strong><span>ACTIVE ROUTES</span></div><div><strong id="reserved-resource-count">0</strong><span>RESERVED</span></div><div><strong id="traffic-hold-count">0</strong><span>SAFETY HOLDS</span></div><div><strong id="restriction-count">0</strong><span>CLOSED</span></div></div>
               <div id="traffic-plan-list" class="traffic-plan-list"></div>
+              <div class="traffic-control"><select id="restriction-resource" aria-label="Traffic resource"></select><input id="restriction-reason" maxlength="160" placeholder="Closure reason" aria-label="Closure reason" /><button id="close-resource-button">Close</button></div>
+              <div id="traffic-restriction-list" class="traffic-restriction-list"></div>
             </article>
           </aside>
         </section>

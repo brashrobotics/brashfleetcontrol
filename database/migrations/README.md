@@ -60,6 +60,11 @@ Keep this README current as implementation is added, and define ownership, valid
 - Operator acknowledgement identity, note, and timestamp.
 - Explicit resolution timestamps while retaining alarm history.
 
+`008_traffic_restrictions.sql` adds:
+
+- Operator-managed edge and node closures with responsible identities and reasons.
+- One active restriction per map resource while retaining cleared restriction history.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

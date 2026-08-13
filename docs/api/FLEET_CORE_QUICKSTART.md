@@ -151,6 +151,26 @@ Safety holds are red; robot details show heartbeat age and connection state.
 The mission table shows each queued mission's effective priority and next
 automatic dispatch attempt.
 
+Operators can close an edge or node from the dashboard traffic card. New routes
+are calculated around active closures, and a critical alarm is raised if a
+closure intersects a route that is already active. The API equivalent is:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/traffic/restrictions \
+  -H 'content-type: application/json' \
+  -d '{"mapId":"plant-a@1","resourceId":"edge:E-NORTH-02","reason":"Aisle maintenance","operatorId":"operator-1"}'
+
+curl 'http://127.0.0.1:4273/api/v1/traffic/restrictions?mapId=plant-a%401'
+
+curl -X POST http://127.0.0.1:4273/api/v1/traffic/restrictions/RESTRICTION_ID/clear \
+  -H 'content-type: application/json' \
+  -d '{"operatorId":"operator-1"}'
+```
+
+Closing a resource does not silently revoke an already-issued robot route.
+That situation requires operator coordination because the robot may already be
+inside the affected area.
+
 Robot heartbeat loss, recovery-required missions, command-delivery failures,
 and rejected cancellation requests create deduplicated alarms. Repeated
 observations increment one alarm instead of flooding the operator. Acknowledge

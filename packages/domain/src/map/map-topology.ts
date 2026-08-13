@@ -131,7 +131,11 @@ export class MapTopology {
     return this.nearestNode(location);
   }
 
-  shortestPath(fromNodeId: string, toNodeId: string): RouteTraversal[] {
+  shortestPath(
+    fromNodeId: string,
+    toNodeId: string,
+    constraints: { excludedEdgeIds?: ReadonlySet<string>; excludedNodeIds?: ReadonlySet<string> } = {},
+  ): RouteTraversal[] {
     this.getNode(fromNodeId);
     this.getNode(toNodeId);
     if (fromNodeId === toNodeId) return [];
@@ -152,6 +156,8 @@ export class MapTopology {
       if (current === toNodeId) break;
 
       for (const traversal of this.adjacency.get(current) ?? []) {
+        if (constraints.excludedEdgeIds?.has(traversal.edgeId)) continue;
+        if (constraints.excludedNodeIds?.has(traversal.toNodeId) && traversal.toNodeId !== toNodeId) continue;
         if (!unvisited.has(traversal.toNodeId)) continue;
         const candidate = currentDistance + traversal.travelTimeSeconds;
         const known = distances.get(traversal.toNodeId) ?? Infinity;

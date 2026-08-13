@@ -324,6 +324,61 @@ test("PostgreSQL deduplicates, acknowledges, and resolves operational alarms", {
   }
 });
 
+test("PostgreSQL persists one active traffic restriction and allows reopening after clear", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  await persistence.maps.save(createDefaultPlantTopology());
+  const firstAt = new Date();
+
+  try {
+    const first = await persistence.trafficRestrictions.create(
+      "plant-a@1",
+      "edge:E-NORTH-02",
+      `Maintenance ${suffix}`,
+      "postgres-traffic-operator",
+      firstAt,
+    );
+    const duplicate = await persistence.trafficRestrictions.create(
+      "plant-a@1",
+      "edge:E-NORTH-02",
+      "Duplicate request",
+      "postgres-traffic-operator-2",
+      new Date(firstAt.getTime() + 1_000),
+    );
+    assert.equal(duplicate.restrictionId, first.restrictionId);
+    assert.equal((await persistence.trafficRestrictions.listActive("plant-a@1")).length, 1);
+
+    const cleared = await persistence.trafficRestrictions.clear(
+      first.restrictionId,
+      "postgres-traffic-supervisor",
+      new Date(firstAt.getTime() + 2_000),
+    );
+    assert.equal(cleared?.status, "CLEARED");
+    assert.equal(cleared?.clearedBy, "postgres-traffic-supervisor");
+    assert.equal((await persistence.trafficRestrictions.listActive("plant-a@1")).length, 0);
+
+    const reopened = await persistence.trafficRestrictions.create(
+      "plant-a@1",
+      "edge:E-NORTH-02",
+      "Second maintenance window",
+      "postgres-traffic-operator",
+      new Date(firstAt.getTime() + 3_000),
+    );
+    assert.notEqual(reopened.restrictionId, first.restrictionId);
+    assert.equal(reopened.status, "ACTIVE");
+    await persistence.trafficRestrictions.clear(
+      reopened.restrictionId,
+      "postgres-traffic-supervisor",
+      new Date(firstAt.getTime() + 4_000),
+    );
+  } finally {
+    await persistence.close();
+  }
+});
+
 async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): Promise<void> {
   const stale = await persistence.database.query<{ mission_id: string }>(`
     SELECT mission_id
@@ -369,6 +424,7 @@ function createCore(
     events: persistence.events,
     maps: persistence.maps,
     traffic: persistence.traffic,
+    trafficRestrictions: persistence.trafficRestrictions,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -399,6 +455,7 @@ function createMultiRobotCore(
     events: persistence.events,
     maps: persistence.maps,
     traffic: persistence.traffic,
+    trafficRestrictions: persistence.trafficRestrictions,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),

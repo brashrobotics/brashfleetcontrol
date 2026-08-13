@@ -173,6 +173,49 @@ test("API lists and acknowledges operational alarms", async () => {
   await core.stop();
 });
 
+test("API creates, lists, and clears an operator traffic restriction", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+  try {
+    const createResponse = await api.fetch(new Request("http://fleet.test/api/v1/traffic/restrictions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mapId: "plant-a@1",
+        resourceId: "edge:E-NORTH-02",
+        reason: "API maintenance closure",
+        operatorId: "operator-api",
+      }),
+    }));
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as { restriction: { restrictionId: string; status: string } };
+    assert.equal(created.restriction.status, "ACTIVE");
+
+    const listResponse = await api.fetch(new Request(
+      "http://fleet.test/api/v1/traffic/restrictions?mapId=plant-a%401",
+    ));
+    assert.equal(listResponse.status, 200);
+    const list = await listResponse.json() as { restrictions: Array<{ restrictionId: string }> };
+    assert.deepEqual(list.restrictions.map((item) => item.restrictionId), [created.restriction.restrictionId]);
+
+    const clearResponse = await api.fetch(new Request(
+      `http://fleet.test/api/v1/traffic/restrictions/${created.restriction.restrictionId}/clear`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ operatorId: "operator-supervisor" }),
+      },
+    ));
+    assert.equal(clearResponse.status, 200);
+    const cleared = await clearResponse.json() as { restriction: { status: string; clearedBy: string } };
+    assert.equal(cleared.restriction.status, "CLEARED");
+    assert.equal(cleared.restriction.clearedBy, "operator-supervisor");
+  } finally {
+    await core.stop();
+  }
+});
+
 test("API does not dispatch an external mission reference twice", async () => {
   const { core } = createTestFleetSystem();
   await core.start();

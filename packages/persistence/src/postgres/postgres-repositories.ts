@@ -17,6 +17,8 @@ import type {
   RobotRepository,
   RaiseAlarmInput,
   TrafficPlanRepository,
+  TrafficRestrictionRecord,
+  TrafficRestrictionRepository,
 } from "@brash/application";
 import type {
   AlarmSeverity,
@@ -132,6 +134,11 @@ interface AlarmRow {
   acknowledged_by: string | null;
   acknowledgement_note: string | null;
   resolved_at: Date | null;
+}
+
+interface TrafficRestrictionRow {
+  restriction_id: string; map_id: string; resource_id: string; status: "ACTIVE" | "CLEARED";
+  reason: string; created_by: string; created_at: Date; cleared_by: string | null; cleared_at: Date | null;
 }
 
 interface MapTopologyRow {
@@ -477,6 +484,38 @@ export class PostgresAlarmRepository implements AlarmRepository {
       RETURNING *
     `, [fingerprint, at]);
     return result.rows[0] ? alarmFromRow(result.rows[0]) : null;
+  }
+}
+
+export class PostgresTrafficRestrictionRepository implements TrafficRestrictionRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async create(mapId: string, resourceId: string, reason: string, operatorId: string, at: Date): Promise<TrafficRestrictionRecord> {
+    const result = await this.database.query<TrafficRestrictionRow>(`
+      INSERT INTO traffic_restrictions (map_id, resource_id, status, reason, created_by, created_at, updated_at)
+      VALUES ($1, $2, 'ACTIVE', $3, $4, $5, $5)
+      ON CONFLICT (map_id, resource_id) WHERE status = 'ACTIVE' DO UPDATE SET updated_at = EXCLUDED.updated_at
+      RETURNING *
+    `, [mapId, resourceId, reason, operatorId, at]);
+    return trafficRestrictionFromRow(result.rows[0]);
+  }
+
+  async listActive(mapId: string): Promise<TrafficRestrictionRecord[]> {
+    const result = await this.database.query<TrafficRestrictionRow>(
+      "SELECT * FROM traffic_restrictions WHERE map_id = $1 AND status = 'ACTIVE' ORDER BY resource_id",
+      [mapId],
+    );
+    return result.rows.map(trafficRestrictionFromRow);
+  }
+
+  async clear(restrictionId: string, operatorId: string, at: Date): Promise<TrafficRestrictionRecord | null> {
+    const numericId = restrictionId.match(/^RESTRICTION-(\d+)$/)?.[1];
+    if (!numericId) return null;
+    const result = await this.database.query<TrafficRestrictionRow>(`
+      UPDATE traffic_restrictions SET status = 'CLEARED', cleared_by = $2, cleared_at = $3, updated_at = $3
+      WHERE restriction_id = $1 AND status = 'ACTIVE' RETURNING *
+    `, [numericId, operatorId, at]);
+    return result.rows[0] ? trafficRestrictionFromRow(result.rows[0]) : null;
   }
 }
 
@@ -1018,6 +1057,14 @@ function alarmFromRow(row: AlarmRow): AlarmRecord {
 function parseAlarmId(alarmId: string): string | null {
   const match = alarmId.match(/^ALARM-(\d+)$/);
   return match?.[1] ?? null;
+}
+
+function trafficRestrictionFromRow(row: TrafficRestrictionRow): TrafficRestrictionRecord {
+  return {
+    restrictionId: `RESTRICTION-${row.restriction_id}`, mapId: row.map_id, resourceId: row.resource_id,
+    status: row.status, reason: row.reason, createdBy: row.created_by, createdAt: new Date(row.created_at),
+    clearedBy: row.cleared_by, clearedAt: row.cleared_at ? new Date(row.cleared_at) : null,
+  };
 }
 
 function trafficReservationFromRow(row: TrafficReservationRow): TrafficReservationSnapshot {

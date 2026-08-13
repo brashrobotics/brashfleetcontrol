@@ -17,6 +17,7 @@ import {
   type MissionView,
   type RobotAdapterEvent,
   type TrafficPlanView,
+  type TrafficRestrictionView,
   type TrafficScheduleView,
 } from "@brash/contracts";
 import {
@@ -51,6 +52,8 @@ import type {
   PendingCommand,
   RobotRepository,
   TrafficPlanRepository,
+  TrafficRestrictionRecord,
+  TrafficRestrictionRepository,
   TransactionManager,
 } from "./ports/repositories.js";
 import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
@@ -65,6 +68,7 @@ export interface FleetCoreDependencies {
   events: MissionEventRepository;
   maps: MapTopologyRepository;
   traffic: TrafficPlanRepository;
+  trafficRestrictions: TrafficRestrictionRepository;
   transactions: TransactionManager;
   clock: Clock;
   ids: IdGenerator;
@@ -284,6 +288,7 @@ export class FleetCore {
         now,
       );
       const previousRoute = await this.dependencies.traffic.getByMission(mission.missionId);
+      const restrictions = await this.dependencies.trafficRestrictions.listActive(topology.mapId);
       const route = this.dependencies.trafficScheduler.schedule({
         routeId: previousRoute?.routeId ?? this.dependencies.ids.next("route"),
         missionId: mission.missionId,
@@ -295,6 +300,7 @@ export class FleetCore {
         requestedStartAt: new Date(now.getTime() + 5_000),
         plannedAt: now,
         existingReservations,
+        excludedResourceIds: restrictions.map((restriction) => restriction.resourceId),
       });
 
       robot.reserve(mission.missionId, now);
@@ -571,6 +577,43 @@ export class FleetCore {
       plans: plans.map(trafficPlanToView),
       reservations: reservations.map(trafficReservationToView),
     };
+  }
+
+  async listTrafficRestrictions(mapId: string): Promise<TrafficRestrictionView[]> {
+    await this.requireMapTopology(mapId);
+    return (await this.dependencies.trafficRestrictions.listActive(mapId)).map((entry) => this.trafficRestrictionToView(entry));
+  }
+
+  async createTrafficRestriction(input: { mapId: string; resourceId: string; reason: string; operatorId: string }): Promise<TrafficRestrictionView> {
+    const topology = await this.requireMapTopology(input.mapId);
+    if (input.resourceId.startsWith("edge:")) {
+      const edgeId = input.resourceId.slice(5);
+      if (!topology.edges.some((edge) => edge.edgeId === edgeId)) throw new DomainError("MAP_EDGE_NOT_FOUND", `Edge ${edgeId} was not found.`);
+    } else topology.getNode(input.resourceId.slice(5));
+    const now = this.dependencies.clock.now();
+    const restriction = await this.dependencies.trafficRestrictions.create(input.mapId, input.resourceId, input.reason, input.operatorId, now);
+    const impacted = (await this.dependencies.traffic.listByMap(input.mapId))
+      .filter((plan) => plan.status === "ACTIVE" && plan.reservations.some((reservation) => reservation.resourceId === input.resourceId));
+    for (const plan of impacted) {
+      await this.dependencies.alarms.raise({
+        fingerprint: `traffic-restriction:${restriction.restrictionId}:${plan.missionId}`,
+        code: "ACTIVE_ROUTE_RESTRICTED", severity: "CRITICAL",
+        title: `${plan.missionId} uses a closed resource`,
+        message: `${input.resourceId} closed while the route was active; operator coordination is required.`,
+        sourceType: "TRAFFIC", sourceId: plan.missionId, occurredAt: now,
+      });
+    }
+    return this.trafficRestrictionToView(restriction);
+  }
+
+  async clearTrafficRestriction(restrictionId: string, operatorId: string): Promise<TrafficRestrictionView> {
+    const now = this.dependencies.clock.now();
+    const cleared = await this.dependencies.trafficRestrictions.clear(restrictionId, operatorId, now);
+    if (!cleared) throw new DomainError("TRAFFIC_RESTRICTION_NOT_FOUND", `Active restriction ${restrictionId} was not found.`);
+    for (const plan of await this.dependencies.traffic.listByMap(cleared.mapId)) {
+      await this.dependencies.alarms.resolveByFingerprint(`traffic-restriction:${restrictionId}:${plan.missionId}`, now);
+    }
+    return this.trafficRestrictionToView(cleared);
   }
 
   async getRecoveryStatus(): Promise<FleetRecoveryStatusView> {
@@ -1145,6 +1188,15 @@ export class FleetCore {
     };
   }
 
+  private trafficRestrictionToView(record: TrafficRestrictionRecord): TrafficRestrictionView {
+    return {
+      restrictionId: record.restrictionId, mapId: record.mapId, resourceId: record.resourceId,
+      status: record.status, reason: record.reason, createdBy: record.createdBy,
+      createdAt: record.createdAt.toISOString(), clearedBy: record.clearedBy,
+      clearedAt: record.clearedAt?.toISOString() ?? null,
+    };
+  }
+
   private async appendMissionEvent(
     mission: Mission,
     type: MissionEventType,
@@ -1226,6 +1278,7 @@ export class FleetCore {
         now,
         mission.missionId,
       );
+      const restrictions = await this.dependencies.trafficRestrictions.listActive(current.mapId);
       const route = this.dependencies.trafficScheduler.schedule({
         routeId: current.routeId,
         missionId: mission.missionId,
@@ -1237,6 +1290,7 @@ export class FleetCore {
         requestedStartAt: new Date(now.getTime() + 5_000),
         plannedAt: now,
         existingReservations,
+        excludedResourceIds: restrictions.map((restriction) => restriction.resourceId),
       });
       await this.dependencies.traffic.save(route);
       const refreshed = this.buildCommand(mission, robot.robotId, command.commandId, now, route);

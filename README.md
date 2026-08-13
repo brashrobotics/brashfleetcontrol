@@ -324,6 +324,13 @@ Robot: local planning, unexpected obstacle avoidance, controlled stop
 Safety: safely remove or limit motion energy when a hazard is detected
 ```
 
+The current Fleet Core implements durable full-route reservations and
+operator-managed edge/node closures. New dispatches dynamically route around
+closed resources; closing a resource used by an active mission raises a
+critical alarm for explicit operator coordination. These controls are available
+from the local Fleet Management dashboard and the documented `/api/v1/traffic`
+endpoints.
+
 Evaluate [Open-RMF](https://github.com/open-rmf/rmf) when orchestration includes doors, elevators, and heterogeneous fleets. A VDA 5050 adapter may be sufficient for a simpler project that only needs robot-to-fleet communication. Do not add both without a concrete requirement.
 
 Required traffic tests:

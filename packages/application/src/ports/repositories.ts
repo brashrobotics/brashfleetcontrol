@@ -8,6 +8,7 @@ import type {
   MissionEventType,
   MissionEventView,
   MissionState,
+  TrafficRestrictionStatus,
 } from "@brash/contracts";
 import type {
   MapTopology,
@@ -95,6 +96,24 @@ export interface AlarmRepository {
   listActive(): Promise<AlarmRecord[]>;
   acknowledge(alarmId: string, operatorId: string, note: string | null, at: Date): Promise<AlarmRecord | null>;
   resolveByFingerprint(fingerprint: string, at: Date): Promise<AlarmRecord | null>;
+}
+
+export interface TrafficRestrictionRecord {
+  restrictionId: string;
+  mapId: string;
+  resourceId: string;
+  status: TrafficRestrictionStatus;
+  reason: string;
+  createdBy: string;
+  createdAt: Date;
+  clearedBy: string | null;
+  clearedAt: Date | null;
+}
+
+export interface TrafficRestrictionRepository {
+  create(mapId: string, resourceId: string, reason: string, operatorId: string, at: Date): Promise<TrafficRestrictionRecord>;
+  listActive(mapId: string): Promise<TrafficRestrictionRecord[]>;
+  clear(restrictionId: string, operatorId: string, at: Date): Promise<TrafficRestrictionRecord | null>;
 }
 
 export interface RobotRepository {
