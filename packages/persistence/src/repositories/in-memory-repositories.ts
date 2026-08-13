@@ -22,6 +22,12 @@ import type {
   TrafficPlanRepository,
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
+  WorkflowClaimOptions,
+  WorkflowRecord,
+  WorkflowRepository,
+  WorkflowResourceReservationRecord,
+  WorkflowResourceReservationRepository,
+  WorkflowStepRecord,
 } from "@brash/application";
 import type {
   AlarmStatus,
@@ -566,6 +572,94 @@ export class InMemoryInfrastructureResourceRepository implements InfrastructureR
   }
 }
 
+export class InMemoryWorkflowRepository implements WorkflowRepository {
+  private readonly workflows = new Map<string, WorkflowRecord>();
+  private readonly steps = new Map<string, WorkflowStepRecord>();
+
+  async findByExternalReference(externalReference: string): Promise<WorkflowRecord | null> {
+    const workflow = [...this.workflows.values()].find((candidate) => candidate.externalReference === externalReference);
+    return workflow ? cloneWorkflow(workflow) : null;
+  }
+
+  async create(workflow: WorkflowRecord, steps: WorkflowStepRecord[]): Promise<void> {
+    if (this.workflows.has(workflow.workflowId)) throw new Error(`Workflow ${workflow.workflowId} already exists.`);
+    if (workflow.externalReference && [...this.workflows.values()].some((candidate) => candidate.externalReference === workflow.externalReference)) {
+      throw new Error(`Workflow external reference ${workflow.externalReference} already exists.`);
+    }
+    this.workflows.set(workflow.workflowId, cloneWorkflow(workflow));
+    for (const step of steps) this.steps.set(workflowStepKey(step.workflowId, step.definition.stepId), cloneWorkflowStep(step));
+  }
+
+  async getById(workflowId: string): Promise<{ workflow: WorkflowRecord; steps: WorkflowStepRecord[] } | null> {
+    const workflow = this.workflows.get(workflowId);
+    if (!workflow) return null;
+    return {
+      workflow: cloneWorkflow(workflow),
+      steps: [...this.steps.values()].filter((step) => step.workflowId === workflowId)
+        .sort((left, right) => left.definition.stepId.localeCompare(right.definition.stepId)).map(cloneWorkflowStep),
+    };
+  }
+
+  async list(): Promise<WorkflowRecord[]> {
+    return [...this.workflows.values()].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()).map(cloneWorkflow);
+  }
+
+  async claimRunnable(limit: number, options: WorkflowClaimOptions): Promise<WorkflowStepRecord[]> {
+    const runnable = [...this.steps.values()].filter((step) => {
+      const workflow = this.workflows.get(step.workflowId);
+      if (!workflow || !["PENDING", "RUNNING", "CANCELLING"].includes(workflow.status)) return false;
+      if (!["PENDING", "WAITING_RETRY", "RUNNING"].includes(step.status)) return false;
+      if (step.nextAttemptAt.getTime() > options.claimedAt.getTime()) return false;
+      if (step.leaseExpiresAt && step.leaseExpiresAt.getTime() > options.claimedAt.getTime()) return false;
+      return step.definition.dependsOn.every((dependency) => this.steps.get(workflowStepKey(step.workflowId, dependency))?.status === "SUCCEEDED");
+    }).sort((left, right) => Number(right.status === "RUNNING") - Number(left.status === "RUNNING")
+      || left.nextAttemptAt.getTime() - right.nextAttemptAt.getTime()
+      || left.workflowId.localeCompare(right.workflowId) || left.definition.stepId.localeCompare(right.definition.stepId)).slice(0, limit);
+    for (const step of runnable) {
+      step.leaseOwner = options.workerId;
+      step.leaseExpiresAt = new Date(options.claimedAt.getTime() + options.leaseDurationMs);
+    }
+    return runnable.map(cloneWorkflowStep);
+  }
+
+  async saveStep(step: WorkflowStepRecord): Promise<void> {
+    this.steps.set(workflowStepKey(step.workflowId, step.definition.stepId), cloneWorkflowStep(step));
+  }
+
+  async saveWorkflow(workflow: WorkflowRecord): Promise<void> {
+    this.workflows.set(workflow.workflowId, cloneWorkflow(workflow));
+  }
+}
+
+export class InMemoryWorkflowResourceReservationRepository implements WorkflowResourceReservationRepository {
+  private readonly reservations = new Map<string, WorkflowResourceReservationRecord>();
+
+  async getActiveByStep(workflowId: string, stepId: string): Promise<WorkflowResourceReservationRecord | null> {
+    const reservation = [...this.reservations.values()].find((candidate) => candidate.workflowId === workflowId && candidate.stepId === stepId && candidate.state === "ACTIVE");
+    return reservation ? cloneWorkflowResourceReservation(reservation) : null;
+  }
+
+  async tryReserve(reservation: WorkflowResourceReservationRecord): Promise<WorkflowResourceReservationRecord | null> {
+    const conflict = [...this.reservations.values()].some((existing) => existing.state === "ACTIVE"
+      && existing.resourceId === reservation.resourceId
+      && existing.startsAt.getTime() < reservation.endsAt.getTime()
+      && reservation.startsAt.getTime() < existing.endsAt.getTime());
+    if (conflict) return null;
+    this.reservations.set(reservation.reservationId, cloneWorkflowResourceReservation(reservation));
+    return cloneWorkflowResourceReservation(reservation);
+  }
+
+  async release(reservationId: string, at: Date): Promise<WorkflowResourceReservationRecord | null> {
+    const reservation = this.reservations.get(reservationId);
+    if (!reservation) return null;
+    if (reservation.state === "ACTIVE") {
+      reservation.state = "RELEASED";
+      reservation.releasedAt = new Date(at);
+    }
+    return cloneWorkflowResourceReservation(reservation);
+  }
+}
+
 function cloneMapVersion(record: MapVersionRecord): MapVersionRecord {
   return {
     ...record,
@@ -577,6 +671,31 @@ function cloneMapVersion(record: MapVersionRecord): MapVersionRecord {
 
 function cloneInfrastructureResource(record: InfrastructureResourceRecord): InfrastructureResourceRecord {
   return { ...record, createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt) };
+}
+
+function cloneWorkflow(record: WorkflowRecord): WorkflowRecord {
+  return { ...record, createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt), completedAt: record.completedAt ? new Date(record.completedAt) : null };
+}
+
+function cloneWorkflowStep(record: WorkflowStepRecord): WorkflowStepRecord {
+  return {
+    ...record,
+    definition: structuredClone(record.definition),
+    startedAt: record.startedAt ? new Date(record.startedAt) : null,
+    completedAt: record.completedAt ? new Date(record.completedAt) : null,
+    nextAttemptAt: new Date(record.nextAttemptAt),
+    timeoutAt: record.timeoutAt ? new Date(record.timeoutAt) : null,
+    waitUntil: record.waitUntil ? new Date(record.waitUntil) : null,
+    leaseExpiresAt: record.leaseExpiresAt ? new Date(record.leaseExpiresAt) : null,
+  };
+}
+
+function cloneWorkflowResourceReservation(record: WorkflowResourceReservationRecord): WorkflowResourceReservationRecord {
+  return { ...record, startsAt: new Date(record.startsAt), endsAt: new Date(record.endsAt), releasedAt: record.releasedAt ? new Date(record.releasedAt) : null };
+}
+
+function workflowStepKey(workflowId: string, stepId: string): string {
+  return `${workflowId}:${stepId}`;
 }
 
 function familyIdFor(mapId: string): string {

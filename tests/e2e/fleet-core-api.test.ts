@@ -354,3 +354,62 @@ test("API cancels queued missions locally and dispatched missions through the ad
   assert.equal(cancellation.cancellation.receipt.status, "ACCEPTED");
   await core.stop();
 });
+
+test("API validates, exposes, and cancels durable workflows", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+
+  try {
+    const invalid = await api.fetch(new Request("http://fleet.test/api/v1/workflows", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Cyclic workflow",
+        steps: [
+          { stepId: "a", name: "A", type: "WAIT", dependsOn: ["b"], timeoutSeconds: 60, maxAttempts: 1, retryDelaySeconds: 1, durationSeconds: 1 },
+          { stepId: "b", name: "B", type: "WAIT", dependsOn: ["a"], timeoutSeconds: 60, maxAttempts: 1, retryDelaySeconds: 1, durationSeconds: 1 },
+        ],
+      }),
+    }));
+    assert.equal(invalid.status, 400);
+
+    const created = await api.fetch(new Request("http://fleet.test/api/v1/workflows", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "API quality hold",
+        externalReference: "WF-API-QUALITY-HOLD",
+        steps: [{
+          stepId: "hold",
+          name: "Quality stabilization",
+          type: "WAIT",
+          dependsOn: [],
+          timeoutSeconds: 60,
+          maxAttempts: 1,
+          retryDelaySeconds: 1,
+          durationSeconds: 5,
+        }],
+      }),
+    }));
+    assert.equal(created.status, 201);
+    const body = await created.json() as { workflow: { workflowId: string; status: string } };
+    assert.equal(body.workflow.status, "PENDING");
+
+    const fetched = await api.fetch(new Request(`http://fleet.test/api/v1/workflows/${body.workflow.workflowId}`));
+    assert.equal(fetched.status, 200);
+    const listed = await api.fetch(new Request("http://fleet.test/api/v1/workflows"));
+    const listBody = await listed.json() as { workflows: Array<{ workflowId: string }> };
+    assert.deepEqual(listBody.workflows.map((workflow) => workflow.workflowId), [body.workflow.workflowId]);
+
+    const cancelled = await api.fetch(new Request(
+      `http://fleet.test/api/v1/workflows/${body.workflow.workflowId}/cancel`,
+      { method: "POST" },
+    ));
+    const cancelledBody = await cancelled.json() as { workflow: { status: string; steps: Array<{ status: string }> } };
+    assert.equal(cancelledBody.workflow.status, "CANCELLED");
+    assert.deepEqual(cancelledBody.workflow.steps.map((step) => step.status), ["CANCELLED"]);
+  } finally {
+    await core.stop();
+  }
+});

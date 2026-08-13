@@ -238,6 +238,30 @@ accepted command, and keeps its traffic reservations until the robot confirms
 `CANCELLED`. Adapter delivery failures and rejections remain visible in the
 mission timeline, and the same request can be retried safely.
 
+## Run a multi-step workflow
+
+Workflows execute a validated dependency graph and persist every step. This
+example waits for stabilization and then starts a transport mission:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/workflows \
+  -H 'content-type: application/json' \
+  -d '{
+    "name":"Inbound pallet inspection",
+    "externalReference":"ERP-WORK-1042",
+    "steps":[
+      {"stepId":"stabilize","name":"Stabilize load","type":"WAIT","dependsOn":[],"timeoutSeconds":60,"maxAttempts":2,"retryDelaySeconds":5,"durationSeconds":10},
+      {"stepId":"move","name":"Move to quality","type":"TRANSPORT","dependsOn":["stabilize"],"timeoutSeconds":900,"maxAttempts":3,"retryDelaySeconds":15,"mission":{"type":"TRANSPORT","priority":70,"requiredCapabilities":["pallet_transport"],"payloadKg":250,"pickup":{"stationId":"WAREHOUSE-A","mapId":"plant-a@1","x":10,"y":5},"dropoff":{"stationId":"QUALITY","mapId":"plant-a@1","x":73,"y":74}}}
+    ]
+  }'
+```
+
+Use `GET /api/v1/workflows` for the operator list,
+`GET /api/v1/workflows/{workflowId}` for step state, and
+`POST /api/v1/workflows/{workflowId}/cancel` for controlled cancellation.
+Charge, dock, and inspection steps require a matching available
+`SERVICE_EXCLUSIVE` infrastructure resource.
+
 ## Verify the implementation
 
 ```bash

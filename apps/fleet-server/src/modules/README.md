@@ -8,7 +8,7 @@ Groups product capabilities by business area while the system remains a modular 
 
 ## Responsibilities
 
-Provide clear module entry points and isolate robots, missions, dispatch, traffic, maps, charging, alarms, identity, audit, and integrations.
+Provide clear module entry points and isolate robots, missions, workflows, dispatch, traffic, maps, charging, alarms, identity, audit, and integrations.
 
 ## Boundaries
 

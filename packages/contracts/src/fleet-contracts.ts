@@ -94,6 +94,53 @@ export interface MissionView {
   recoveryStartedAt: string | null;
 }
 
+export type WorkflowStepType = "TRANSPORT" | "WAIT" | "CHARGE" | "INSPECT" | "DOCK";
+export type WorkflowStatus = "PENDING" | "RUNNING" | "CANCELLING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+export type WorkflowStepStatus = "PENDING" | "WAITING_RETRY" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
+export interface WorkflowStepDefinition {
+  stepId: string;
+  name: string;
+  type: WorkflowStepType;
+  dependsOn: string[];
+  timeoutSeconds: number;
+  maxAttempts: number;
+  retryDelaySeconds: number;
+  mission?: CreateMissionRequest;
+  resourceId?: string;
+  durationSeconds?: number;
+}
+
+export interface CreateWorkflowRequest {
+  name: string;
+  externalReference?: string;
+  steps: WorkflowStepDefinition[];
+}
+
+export interface WorkflowStepView extends WorkflowStepDefinition {
+  status: WorkflowStepStatus;
+  attemptCount: number;
+  missionId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  nextAttemptAt: string;
+  timeoutAt: string | null;
+  waitUntil: string | null;
+  lastError: string | null;
+}
+
+export interface WorkflowView {
+  workflowId: string;
+  name: string;
+  externalReference: string | null;
+  status: WorkflowStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  failureReason: string | null;
+  steps: WorkflowStepView[];
+}
+
 export interface RobotView extends RobotDescriptor {
   state: RobotStateSnapshot;
 }

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.9.0
-  description: Vendor-independent missions, immutable map versions, infrastructure resources, traffic coordination, alarms, recovery, and operator control API.
+  version: 0.10.0
+  description: Vendor-independent missions, durable multi-step workflows, immutable map versions, infrastructure resources, traffic coordination, alarms, recovery, and operator control API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -368,6 +368,74 @@ paths:
                 required: [recovery]
                 properties:
                   recovery: { $ref: "#/components/schemas/FleetRecoveryStatus" }
+  /api/v1/workflows:
+    get:
+      operationId: listWorkflows
+      responses:
+        "200":
+          description: Durable workflows ordered by creation time
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflows]
+                properties:
+                  workflows:
+                    type: array
+                    items: { $ref: "#/components/schemas/Workflow" }
+    post:
+      operationId: createWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateWorkflowRequest" }
+      responses:
+        "201":
+          description: Validated DAG workflow persisted for asynchronous execution
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflow]
+                properties:
+                  workflow: { $ref: "#/components/schemas/Workflow" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/workflows/{workflowId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkflowId"
+    get:
+      operationId: getWorkflow
+      responses:
+        "200":
+          description: Workflow aggregate with step execution state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflow]
+                properties:
+                  workflow: { $ref: "#/components/schemas/Workflow" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/workflows/{workflowId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/WorkflowId"
+    post:
+      operationId: cancelWorkflow
+      responses:
+        "200":
+          description: Workflow cancellation requested or completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflow]
+                properties:
+                  workflow: { $ref: "#/components/schemas/Workflow" }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/missions:
     post:
       operationId: createMission
@@ -497,6 +565,11 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1 }
+    WorkflowId:
+      name: workflowId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
   responses:
     BadRequest:
       description: Invalid request
@@ -536,6 +609,66 @@ components:
         pickup: { $ref: "#/components/schemas/Location" }
         dropoff: { $ref: "#/components/schemas/Location" }
         autoDispatch: { type: boolean, default: true }
+    WorkflowStepDefinition:
+      type: object
+      additionalProperties: false
+      required: [stepId, name, type, dependsOn, timeoutSeconds, maxAttempts, retryDelaySeconds]
+      properties:
+        stepId: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        type: { type: string, enum: [TRANSPORT, WAIT, CHARGE, INSPECT, DOCK] }
+        dependsOn:
+          type: array
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        timeoutSeconds: { type: integer, minimum: 1 }
+        maxAttempts: { type: integer, minimum: 1, maximum: 20 }
+        retryDelaySeconds: { type: integer, minimum: 0 }
+        mission: { $ref: "#/components/schemas/CreateMissionRequest" }
+        resourceId: { type: string, minLength: 1 }
+        durationSeconds: { type: integer, minimum: 0 }
+    CreateWorkflowRequest:
+      type: object
+      additionalProperties: false
+      required: [name, steps]
+      properties:
+        name: { type: string, minLength: 1 }
+        externalReference: { type: string, minLength: 1 }
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/WorkflowStepDefinition" }
+    WorkflowStep:
+      allOf:
+        - $ref: "#/components/schemas/WorkflowStepDefinition"
+        - type: object
+          required: [status, attemptCount, missionId, startedAt, completedAt, nextAttemptAt, timeoutAt, waitUntil, lastError]
+          properties:
+            status: { type: string, enum: [PENDING, WAITING_RETRY, RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+            attemptCount: { type: integer, minimum: 0 }
+            missionId: { type: [string, "null"] }
+            startedAt: { type: [string, "null"], format: date-time }
+            completedAt: { type: [string, "null"], format: date-time }
+            nextAttemptAt: { type: string, format: date-time }
+            timeoutAt: { type: [string, "null"], format: date-time }
+            waitUntil: { type: [string, "null"], format: date-time }
+            lastError: { type: [string, "null"] }
+    Workflow:
+      type: object
+      required: [workflowId, name, externalReference, status, createdAt, updatedAt, completedAt, failureReason, steps]
+      properties:
+        workflowId: { type: string }
+        name: { type: string }
+        externalReference: { type: [string, "null"] }
+        status: { type: string, enum: [PENDING, RUNNING, CANCELLING, SUCCEEDED, FAILED, CANCELLED] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+        failureReason: { type: [string, "null"] }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/WorkflowStep" }
     Mission:
       type: object
       required:

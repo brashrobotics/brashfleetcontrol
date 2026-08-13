@@ -4,6 +4,7 @@ import type {
   CreateMapVersionRequest,
   CreateMissionRequest,
   CreateTrafficRestrictionRequest,
+  CreateWorkflowRequest,
   InfrastructureReservationPolicy,
   InfrastructureResourceStatus,
   InfrastructureResourceType,
@@ -11,6 +12,7 @@ import type {
   MapNodeView,
   MissionLocation,
   UpdateInfrastructureResourceStatusRequest,
+  WorkflowStepDefinition,
 } from "./fleet-contracts.js";
 
 export class ContractValidationError extends Error {
@@ -174,6 +176,85 @@ export function parseUpdateInfrastructureResourceStatusRequest(value: unknown): 
   const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
   if (issues.length > 0) throw new ContractValidationError(issues);
   return { status: status as InfrastructureResourceStatus, reason, operatorId };
+}
+
+export function parseCreateWorkflowRequest(value: unknown): CreateWorkflowRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const name = nonEmptyString(value.name, "name", issues);
+  const externalReference = value.externalReference === undefined ? undefined : nonEmptyString(value.externalReference, "externalReference", issues);
+  if (!Array.isArray(value.steps) || value.steps.length === 0) {
+    issues.push("steps must contain at least one workflow step.");
+  }
+  const steps = Array.isArray(value.steps) ? value.steps.map((step, index) => parseWorkflowStep(step, index, issues)) : [];
+  const stepIds = new Set<string>();
+  for (const step of steps) {
+    if (stepIds.has(step.stepId)) issues.push(`stepId ${step.stepId} is duplicated.`);
+    stepIds.add(step.stepId);
+  }
+  for (const step of steps) {
+    for (const dependency of step.dependsOn) {
+      if (!stepIds.has(dependency)) issues.push(`${step.stepId} depends on unknown step ${dependency}.`);
+      if (dependency === step.stepId) issues.push(`${step.stepId} cannot depend on itself.`);
+    }
+  }
+  if (!hasAcyclicDependencies(steps)) issues.push("workflow step dependencies must form an acyclic graph.");
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { name, ...(externalReference ? { externalReference } : {}), steps };
+}
+
+function parseWorkflowStep(value: unknown, index: number, issues: string[]): WorkflowStepDefinition {
+  const path = `steps[${index}]`;
+  if (!isRecord(value)) {
+    issues.push(`${path} must be an object.`);
+    return { stepId: "", name: "", type: "WAIT", dependsOn: [], timeoutSeconds: 1, maxAttempts: 1, retryDelaySeconds: 0, durationSeconds: 1 };
+  }
+  const stepId = nonEmptyString(value.stepId, `${path}.stepId`, issues);
+  const name = nonEmptyString(value.name, `${path}.name`, issues);
+  const type = enumValue(value.type, ["TRANSPORT", "WAIT", "CHARGE", "INSPECT", "DOCK"] as const, `${path}.type`, issues) || "WAIT";
+  const timeoutSeconds = finiteNumber(value.timeoutSeconds, `${path}.timeoutSeconds`, issues);
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1) issues.push(`${path}.timeoutSeconds must be a positive integer.`);
+  const maxAttempts = finiteNumber(value.maxAttempts, `${path}.maxAttempts`, issues);
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 100) issues.push(`${path}.maxAttempts must be an integer between 1 and 100.`);
+  const retryDelaySeconds = finiteNumber(value.retryDelaySeconds, `${path}.retryDelaySeconds`, issues);
+  if (!Number.isInteger(retryDelaySeconds) || retryDelaySeconds < 0) issues.push(`${path}.retryDelaySeconds must be a non-negative integer.`);
+  const dependsOn = Array.isArray(value.dependsOn)
+    ? [...new Set(value.dependsOn.map((dependency, dependencyIndex) => nonEmptyString(dependency, `${path}.dependsOn[${dependencyIndex}]`, issues)).filter(Boolean))]
+    : (issues.push(`${path}.dependsOn must be an array.`), []);
+  let mission: CreateMissionRequest | undefined;
+  if (type !== "WAIT") {
+    try {
+      mission = parseCreateMissionRequest(value.mission);
+    } catch (error) {
+      if (error instanceof ContractValidationError) issues.push(...error.issues.map((issue) => `${path}.mission.${issue}`));
+    }
+  } else if (value.mission !== undefined) issues.push(`${path}.mission is not allowed for WAIT steps.`);
+  const resourceId = value.resourceId === undefined ? undefined : nonEmptyString(value.resourceId, `${path}.resourceId`, issues);
+  const durationSeconds = value.durationSeconds === undefined ? undefined : finiteNumber(value.durationSeconds, `${path}.durationSeconds`, issues);
+  if (durationSeconds !== undefined && (!Number.isInteger(durationSeconds) || durationSeconds < 1)) issues.push(`${path}.durationSeconds must be a positive integer.`);
+  if (type === "WAIT" && durationSeconds === undefined) issues.push(`${path}.durationSeconds is required for WAIT steps.`);
+  if (["CHARGE", "INSPECT", "DOCK"].includes(type) && (!resourceId || durationSeconds === undefined)) issues.push(`${path}.resourceId and durationSeconds are required for ${type} steps.`);
+  if (type === "TRANSPORT" && (resourceId || durationSeconds !== undefined)) issues.push(`${path}.resourceId and durationSeconds are not allowed for TRANSPORT steps.`);
+  return {
+    stepId, name, type, dependsOn, timeoutSeconds, maxAttempts, retryDelaySeconds,
+    ...(mission ? { mission } : {}), ...(resourceId ? { resourceId } : {}), ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+  };
+}
+
+function hasAcyclicDependencies(steps: WorkflowStepDefinition[]): boolean {
+  const dependencies = new Map(steps.map((step) => [step.stepId, step.dependsOn]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (stepId: string): boolean => {
+    if (visited.has(stepId)) return true;
+    if (visiting.has(stepId)) return false;
+    visiting.add(stepId);
+    for (const dependency of dependencies.get(stepId) ?? []) if (!visit(dependency)) return false;
+    visiting.delete(stepId);
+    visited.add(stepId);
+    return true;
+  };
+  return steps.every((step) => visit(step.stepId));
 }
 
 function parseMapNodes(value: unknown, issues: string[]): MapNodeView[] {

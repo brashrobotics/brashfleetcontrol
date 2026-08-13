@@ -13,6 +13,9 @@ import type {
   MissionEventView,
   MissionState,
   TrafficRestrictionStatus,
+  WorkflowStatus,
+  WorkflowStepDefinition,
+  WorkflowStepStatus,
 } from "@brash/contracts";
 import type {
   MapTopology,
@@ -32,6 +35,67 @@ export interface MissionRepository {
   findByExternalReference(externalReference: string): Promise<Mission | null>;
   list(): Promise<Mission[]>;
   save(mission: Mission): Promise<void>;
+}
+
+export interface WorkflowRecord {
+  workflowId: string;
+  name: string;
+  externalReference: string | null;
+  status: WorkflowStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+  failureReason: string | null;
+}
+
+export interface WorkflowStepRecord {
+  workflowId: string;
+  definition: WorkflowStepDefinition;
+  status: WorkflowStepStatus;
+  attemptCount: number;
+  missionId: string | null;
+  resourceReservationId: string | null;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  nextAttemptAt: Date;
+  timeoutAt: Date | null;
+  waitUntil: Date | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
+}
+
+export interface WorkflowClaimOptions {
+  workerId: string;
+  claimedAt: Date;
+  leaseDurationMs: number;
+}
+
+export interface WorkflowRepository {
+  findByExternalReference(externalReference: string): Promise<WorkflowRecord | null>;
+  create(workflow: WorkflowRecord, steps: WorkflowStepRecord[]): Promise<void>;
+  getById(workflowId: string): Promise<{ workflow: WorkflowRecord; steps: WorkflowStepRecord[] } | null>;
+  list(): Promise<WorkflowRecord[]>;
+  claimRunnable(limit: number, options: WorkflowClaimOptions): Promise<WorkflowStepRecord[]>;
+  saveStep(step: WorkflowStepRecord): Promise<void>;
+  saveWorkflow(workflow: WorkflowRecord): Promise<void>;
+}
+
+export interface WorkflowResourceReservationRecord {
+  reservationId: string;
+  workflowId: string;
+  stepId: string;
+  resourceId: string;
+  startsAt: Date;
+  endsAt: Date;
+  state: "ACTIVE" | "RELEASED";
+  releasedAt: Date | null;
+}
+
+export interface WorkflowResourceReservationRepository {
+  getActiveByStep(workflowId: string, stepId: string): Promise<WorkflowResourceReservationRecord | null>;
+  tryReserve(reservation: WorkflowResourceReservationRecord): Promise<WorkflowResourceReservationRecord | null>;
+  release(reservationId: string, at: Date): Promise<WorkflowResourceReservationRecord | null>;
 }
 
 export type MissionQueueOutcome = "DISPATCHED" | "CANCELLED";

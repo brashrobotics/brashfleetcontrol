@@ -7,6 +7,7 @@ import {
   type CreateInfrastructureResourceRequest,
   type CreateMapVersionRequest,
   type CreateMissionRequest,
+  type CreateWorkflowRequest,
   type DispatchQueueView,
   type DispatchResult,
   type FleetRecoveryStatusView,
@@ -24,6 +25,7 @@ import {
   type TrafficPlanView,
   type TrafficRestrictionView,
   type TrafficScheduleView,
+  type WorkflowView,
 } from "@brash/contracts";
 import {
   DomainError,
@@ -64,6 +66,10 @@ import type {
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
   TransactionManager,
+  WorkflowRecord,
+  WorkflowRepository,
+  WorkflowResourceReservationRepository,
+  WorkflowStepRecord,
 } from "./ports/repositories.js";
 import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
 
@@ -79,6 +85,8 @@ export interface FleetCoreDependencies {
   infrastructureResources: InfrastructureResourceRepository;
   traffic: TrafficPlanRepository;
   trafficRestrictions: TrafficRestrictionRepository;
+  workflows: WorkflowRepository;
+  workflowResourceReservations: WorkflowResourceReservationRepository;
   transactions: TransactionManager;
   clock: Clock;
   ids: IdGenerator;
@@ -96,6 +104,8 @@ export interface FleetRecoveryOptions {
   dispatchQueueLeaseMs?: number;
   dispatchRetryBaseMs?: number;
   dispatchRetryMaxMs?: number;
+  workflowLeaseMs?: number;
+  workflowPollMs?: number;
 }
 
 interface AssignmentPreparation {
@@ -123,6 +133,8 @@ export class FleetCore {
   private readonly dispatchQueueLeaseMs: number;
   private readonly dispatchRetryBaseMs: number;
   private readonly dispatchRetryMaxMs: number;
+  private readonly workflowLeaseMs: number;
+  private readonly workflowPollMs: number;
   private readonly managedRobotIds = new Set<string>();
   private unsubscribe: Unsubscribe | null = null;
   private started = false;
@@ -135,6 +147,8 @@ export class FleetCore {
     this.dispatchQueueLeaseMs = recoveryOptions.dispatchQueueLeaseMs ?? 30_000;
     this.dispatchRetryBaseMs = recoveryOptions.dispatchRetryBaseMs ?? 1_000;
     this.dispatchRetryMaxMs = recoveryOptions.dispatchRetryMaxMs ?? 60_000;
+    this.workflowLeaseMs = recoveryOptions.workflowLeaseMs ?? 30_000;
+    this.workflowPollMs = recoveryOptions.workflowPollMs ?? 1_000;
   }
 
   async start(): Promise<void> {
@@ -556,6 +570,105 @@ export class FleetCore {
     );
     if (!alarm) throw new DomainError("ALARM_NOT_ACTIVE", `Alarm ${alarmId} was not found or is already resolved.`);
     return this.alarmToView(alarm);
+  }
+
+  async createWorkflow(request: CreateWorkflowRequest): Promise<WorkflowView> {
+    this.assertStarted();
+    if (request.externalReference) {
+      const existing = await this.dependencies.workflows.findByExternalReference(request.externalReference);
+      if (existing) return this.getWorkflow(existing.workflowId);
+    }
+    const now = this.dependencies.clock.now();
+    const workflow: WorkflowRecord = {
+      workflowId: this.dependencies.ids.next("workflow"),
+      name: request.name,
+      externalReference: request.externalReference ?? null,
+      status: "PENDING",
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      failureReason: null,
+    };
+    const steps: WorkflowStepRecord[] = request.steps.map((definition) => ({
+      workflowId: workflow.workflowId,
+      definition: structuredClone(definition),
+      status: "PENDING",
+      attemptCount: 0,
+      missionId: null,
+      resourceReservationId: null,
+      startedAt: null,
+      completedAt: null,
+      nextAttemptAt: now,
+      timeoutAt: null,
+      waitUntil: null,
+      lastError: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }));
+    try {
+      await this.dependencies.workflows.create(workflow, steps);
+    } catch (error) {
+      if (request.externalReference && isUniqueConstraintViolation(error)) {
+        const existing = await this.dependencies.workflows.findByExternalReference(request.externalReference);
+        if (existing) return this.getWorkflow(existing.workflowId);
+      }
+      throw error;
+    }
+    return this.workflowToView(workflow, steps);
+  }
+
+  async getWorkflow(workflowId: string): Promise<WorkflowView> {
+    const aggregate = await this.dependencies.workflows.getById(workflowId);
+    if (!aggregate) throw new DomainError("WORKFLOW_NOT_FOUND", `Workflow ${workflowId} was not found.`);
+    return this.workflowToView(aggregate.workflow, aggregate.steps);
+  }
+
+  async listWorkflows(): Promise<WorkflowView[]> {
+    const records = await this.dependencies.workflows.list();
+    return Promise.all(records.map((record) => this.getWorkflow(record.workflowId)));
+  }
+
+  async processWorkflowQueue(limit = 10): Promise<number> {
+    this.assertStarted();
+    const now = this.dependencies.clock.now();
+    const claimed = await this.dependencies.workflows.claimRunnable(limit, {
+      workerId: this.dependencies.instanceId,
+      claimedAt: now,
+      leaseDurationMs: this.workflowLeaseMs,
+    });
+    for (const step of claimed) await this.processWorkflowStep(step);
+    return claimed.length;
+  }
+
+  async cancelWorkflow(workflowId: string): Promise<WorkflowView> {
+    const aggregate = await this.dependencies.workflows.getById(workflowId);
+    if (!aggregate) throw new DomainError("WORKFLOW_NOT_FOUND", `Workflow ${workflowId} was not found.`);
+    if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(aggregate.workflow.status)) return this.workflowToView(aggregate.workflow, aggregate.steps);
+    const now = this.dependencies.clock.now();
+    let confirmationPending = false;
+    for (const step of aggregate.steps) {
+      if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(step.status)) continue;
+      if (!await this.cancelWorkflowMission(step)) {
+        confirmationPending = true;
+        step.lastError = "Workflow cancellation is awaiting robot confirmation.";
+        step.nextAttemptAt = new Date(now.getTime() + this.workflowPollMs);
+        await this.saveWorkflowStep(step, now);
+        continue;
+      }
+      await this.releaseWorkflowResource(step, now);
+      step.status = "CANCELLED";
+      step.completedAt = now;
+      step.nextAttemptAt = now;
+      step.leaseOwner = null;
+      step.leaseExpiresAt = null;
+      await this.dependencies.workflows.saveStep(step);
+    }
+    aggregate.workflow.status = confirmationPending ? "CANCELLING" : "CANCELLED";
+    aggregate.workflow.completedAt = confirmationPending ? null : now;
+    aggregate.workflow.updatedAt = now;
+    aggregate.workflow.failureReason = confirmationPending ? "Workflow cancellation is awaiting robot confirmation." : null;
+    await this.dependencies.workflows.saveWorkflow(aggregate.workflow);
+    return this.getWorkflow(workflowId);
   }
 
   async getMissionEvents(missionId: string): Promise<MissionEventView[]> {
@@ -1375,6 +1488,31 @@ export class FleetCore {
     };
   }
 
+  private workflowToView(workflow: WorkflowRecord, steps: WorkflowStepRecord[]): WorkflowView {
+    return {
+      workflowId: workflow.workflowId,
+      name: workflow.name,
+      externalReference: workflow.externalReference,
+      status: workflow.status,
+      createdAt: workflow.createdAt.toISOString(),
+      updatedAt: workflow.updatedAt.toISOString(),
+      completedAt: workflow.completedAt?.toISOString() ?? null,
+      failureReason: workflow.failureReason,
+      steps: steps.map((step) => ({
+        ...structuredClone(step.definition),
+        status: step.status,
+        attemptCount: step.attemptCount,
+        missionId: step.missionId,
+        startedAt: step.startedAt?.toISOString() ?? null,
+        completedAt: step.completedAt?.toISOString() ?? null,
+        nextAttemptAt: step.nextAttemptAt.toISOString(),
+        timeoutAt: step.timeoutAt?.toISOString() ?? null,
+        waitUntil: step.waitUntil?.toISOString() ?? null,
+        lastError: step.lastError,
+      })),
+    };
+  }
+
   private async getTrafficControls(mapId: string): Promise<{
     excludedResourceIds: string[];
     infrastructureBindings: Array<{ resourceId: string; edgeId: string | null; nodeId: string | null }>;
@@ -1395,6 +1533,245 @@ export class FleetCore {
         nodeId: resource.nodeId,
       })),
     };
+  }
+
+  private async processWorkflowStep(claimed: WorkflowStepRecord): Promise<void> {
+    const aggregate = await this.dependencies.workflows.getById(claimed.workflowId);
+    if (!aggregate || !["PENDING", "RUNNING", "CANCELLING"].includes(aggregate.workflow.status)) return;
+    const step = aggregate.steps.find((candidate) => candidate.definition.stepId === claimed.definition.stepId);
+    if (!step || !["PENDING", "WAITING_RETRY", "RUNNING"].includes(step.status)) return;
+    const now = this.dependencies.clock.now();
+    try {
+      if (aggregate.workflow.status === "CANCELLING") {
+        if (!await this.cancelWorkflowMission(step)) {
+          step.lastError = "Workflow cancellation is awaiting robot confirmation.";
+          step.nextAttemptAt = new Date(now.getTime() + this.workflowPollMs);
+          await this.saveWorkflowStep(step, now);
+          return;
+        }
+        await this.releaseWorkflowResource(step, now);
+        step.status = "CANCELLED";
+        step.completedAt = now;
+        step.nextAttemptAt = now;
+        await this.saveWorkflowStep(step, now);
+        const cancellation = await this.dependencies.workflows.getById(step.workflowId);
+        if (cancellation && cancellation.steps.every((candidate) => ["SUCCEEDED", "FAILED", "CANCELLED"].includes(candidate.status))) {
+          cancellation.workflow.status = "CANCELLED";
+          cancellation.workflow.completedAt = now;
+          cancellation.workflow.updatedAt = now;
+          cancellation.workflow.failureReason = null;
+          await this.dependencies.workflows.saveWorkflow(cancellation.workflow);
+        }
+        return;
+      }
+      if (step.status === "RUNNING" && step.timeoutAt && step.timeoutAt.getTime() <= now.getTime()) {
+        await this.failWorkflowStep(aggregate.workflow, step, `Step timed out after ${step.definition.timeoutSeconds} seconds.`, now);
+        return;
+      }
+
+      if (step.status !== "RUNNING") {
+        step.status = "RUNNING";
+        step.attemptCount += 1;
+        step.startedAt = now;
+        step.completedAt = null;
+        step.timeoutAt = new Date(now.getTime() + step.definition.timeoutSeconds * 1_000);
+        step.waitUntil = null;
+        step.lastError = null;
+        await this.saveWorkflowStep(step, now);
+        if (aggregate.workflow.status === "PENDING") {
+          aggregate.workflow.status = "RUNNING";
+          aggregate.workflow.updatedAt = now;
+          await this.dependencies.workflows.saveWorkflow(aggregate.workflow);
+        }
+      }
+
+      await this.ensureWorkflowResource(step, now);
+
+      if (step.definition.type === "WAIT") {
+        if (!step.waitUntil) step.waitUntil = new Date(now.getTime() + step.definition.durationSeconds! * 1_000);
+        if (step.waitUntil.getTime() > now.getTime()) {
+          step.nextAttemptAt = step.timeoutAt && step.timeoutAt < step.waitUntil ? step.timeoutAt : step.waitUntil;
+          await this.saveWorkflowStep(step, now);
+          return;
+        }
+        await this.completeWorkflowStep(aggregate.workflow, step, now);
+        return;
+      }
+
+      if (!step.missionId) {
+        const mission = await this.createMission({
+          ...structuredClone(step.definition.mission!),
+          externalReference: `workflow:${step.workflowId}:${step.definition.stepId}:attempt:${step.attemptCount}`,
+          autoDispatch: false,
+        });
+        step.missionId = mission.missionId;
+        step.nextAttemptAt = new Date(now.getTime() + this.workflowPollMs);
+        await this.saveWorkflowStep(step, now);
+      }
+
+      let mission = await this.getMission(step.missionId);
+      if (mission.state === "QUEUED") {
+        try {
+          const result = await this.dispatchMission(mission.missionId);
+          mission = result.mission;
+        } catch (error) {
+          if (!(error instanceof DomainError) || error.code !== "MISSION_NOT_QUEUED") throw error;
+          mission = await this.getMission(step.missionId);
+        }
+      }
+
+      if (mission.state === "COMPLETED") {
+        if (step.definition.durationSeconds) {
+          if (!step.waitUntil) step.waitUntil = new Date(now.getTime() + step.definition.durationSeconds * 1_000);
+          if (step.waitUntil.getTime() > now.getTime()) {
+            step.nextAttemptAt = step.timeoutAt && step.timeoutAt < step.waitUntil ? step.timeoutAt : step.waitUntil;
+            await this.saveWorkflowStep(step, now);
+            return;
+          }
+        }
+        await this.completeWorkflowStep(aggregate.workflow, step, now);
+        return;
+      }
+      if (["FAILED", "CANCELLED"].includes(mission.state)) {
+        throw new Error(`Mission ${mission.missionId} ended as ${mission.state}${mission.failureReason ? `: ${mission.failureReason}` : ""}.`);
+      }
+      step.nextAttemptAt = new Date(now.getTime() + this.workflowPollMs);
+      await this.saveWorkflowStep(step, now);
+    } catch (error) {
+      await this.failWorkflowStep(
+        aggregate.workflow,
+        step,
+        error instanceof Error ? error.message : "Workflow step failed.",
+        now,
+      );
+    }
+  }
+
+  private async ensureWorkflowResource(step: WorkflowStepRecord, now: Date): Promise<void> {
+    const resourceId = step.definition.resourceId;
+    if (!resourceId) return;
+    if (step.resourceReservationId) return;
+    const recovered = await this.dependencies.workflowResourceReservations.getActiveByStep(step.workflowId, step.definition.stepId);
+    if (recovered) {
+      step.resourceReservationId = recovered.reservationId;
+      await this.saveWorkflowStep(step, now);
+      return;
+    }
+    const resource = await this.dependencies.infrastructureResources.getById(resourceId);
+    if (!resource) throw new Error(`Service resource ${resourceId} was not found.`);
+    if (resource.status !== "AVAILABLE") throw new Error(`Service resource ${resourceId} is ${resource.status.toLowerCase()}.`);
+    if (resource.reservationPolicy !== "SERVICE_EXCLUSIVE") throw new Error(`Resource ${resourceId} is not a service resource.`);
+    const expectedType = ({ CHARGE: "CHARGER", INSPECT: "WORKCELL", DOCK: "DOCK" } as const)[step.definition.type as "CHARGE" | "INSPECT" | "DOCK"];
+    if (expectedType && resource.type !== expectedType) throw new Error(`${step.definition.type} requires ${expectedType}, received ${resource.type}.`);
+    if (step.definition.mission?.pickup.mapId !== resource.mapId) throw new Error(`Resource ${resourceId} belongs to a different map version.`);
+    const reservationId = this.dependencies.ids.next("workflowReservation");
+    const reserved = await this.dependencies.workflowResourceReservations.tryReserve({
+      reservationId,
+      workflowId: step.workflowId,
+      stepId: step.definition.stepId,
+      resourceId,
+      startsAt: now,
+      endsAt: step.timeoutAt ?? new Date(now.getTime() + step.definition.timeoutSeconds * 1_000),
+      state: "ACTIVE",
+      releasedAt: null,
+    });
+    if (!reserved) throw new Error(`Service resource ${resourceId} is reserved by another workflow.`);
+    step.resourceReservationId = reserved.reservationId;
+    await this.saveWorkflowStep(step, now);
+  }
+
+  private async completeWorkflowStep(workflow: WorkflowRecord, step: WorkflowStepRecord, now: Date): Promise<void> {
+    await this.releaseWorkflowResource(step, now);
+    step.status = "SUCCEEDED";
+    step.completedAt = now;
+    step.nextAttemptAt = now;
+    step.lastError = null;
+    await this.saveWorkflowStep(step, now);
+    const aggregate = await this.dependencies.workflows.getById(workflow.workflowId);
+    if (aggregate && aggregate.steps.every((candidate) => candidate.status === "SUCCEEDED")) {
+      aggregate.workflow.status = "SUCCEEDED";
+      aggregate.workflow.completedAt = now;
+      aggregate.workflow.updatedAt = now;
+      aggregate.workflow.failureReason = null;
+      await this.dependencies.workflows.saveWorkflow(aggregate.workflow);
+    }
+  }
+
+  private async failWorkflowStep(workflow: WorkflowRecord, step: WorkflowStepRecord, reason: string, now: Date): Promise<void> {
+    const missionClear = await this.cancelWorkflowMission(step);
+    if (!missionClear) {
+      step.status = "RUNNING";
+      step.lastError = `${reason} Cancellation confirmation is pending.`;
+      step.nextAttemptAt = new Date(now.getTime() + this.workflowPollMs);
+      await this.saveWorkflowStep(step, now);
+      return;
+    }
+    await this.releaseWorkflowResource(step, now);
+    if (step.attemptCount < step.definition.maxAttempts) {
+      step.status = "WAITING_RETRY";
+      step.missionId = null;
+      step.startedAt = null;
+      step.completedAt = null;
+      step.timeoutAt = null;
+      step.waitUntil = null;
+      step.lastError = reason;
+      step.nextAttemptAt = new Date(now.getTime() + step.definition.retryDelaySeconds * 1_000);
+      await this.saveWorkflowStep(step, now);
+      return;
+    }
+
+    step.status = "FAILED";
+    step.completedAt = now;
+    step.lastError = reason;
+    step.nextAttemptAt = now;
+    await this.saveWorkflowStep(step, now);
+    const aggregate = await this.dependencies.workflows.getById(workflow.workflowId);
+    if (aggregate) {
+      for (const candidate of aggregate.steps) {
+        if (candidate.definition.stepId === step.definition.stepId || ["SUCCEEDED", "FAILED", "CANCELLED"].includes(candidate.status)) continue;
+        if (!await this.cancelWorkflowMission(candidate)) continue;
+        await this.releaseWorkflowResource(candidate, now);
+        candidate.status = "CANCELLED";
+        candidate.completedAt = now;
+        candidate.nextAttemptAt = now;
+        await this.saveWorkflowStep(candidate, now);
+      }
+      aggregate.workflow.status = "FAILED";
+      aggregate.workflow.completedAt = now;
+      aggregate.workflow.updatedAt = now;
+      aggregate.workflow.failureReason = `${step.definition.stepId}: ${reason}`;
+      await this.dependencies.workflows.saveWorkflow(aggregate.workflow);
+    }
+  }
+
+  private async cancelWorkflowMission(step: WorkflowStepRecord): Promise<boolean> {
+    if (!step.missionId) return true;
+    const mission = await this.getMission(step.missionId);
+    if (["COMPLETED", "FAILED", "CANCELLED"].includes(mission.state)) return true;
+    try {
+      const result = await this.cancelMission(step.missionId);
+      return result.mission.state === "CANCELLED";
+    } catch {
+      return false;
+    }
+  }
+
+  private async releaseWorkflowResource(step: WorkflowStepRecord, now: Date): Promise<void> {
+    if (!step.resourceReservationId) return;
+    await this.dependencies.workflowResourceReservations.release(step.resourceReservationId, now);
+    step.resourceReservationId = null;
+  }
+
+  private async saveWorkflowStep(step: WorkflowStepRecord, now: Date): Promise<void> {
+    step.leaseOwner = null;
+    step.leaseExpiresAt = null;
+    await this.dependencies.workflows.saveStep(step);
+    const aggregate = await this.dependencies.workflows.getById(step.workflowId);
+    if (aggregate && aggregate.workflow.status === "PENDING") {
+      aggregate.workflow.status = "RUNNING";
+      aggregate.workflow.updatedAt = now;
+      await this.dependencies.workflows.saveWorkflow(aggregate.workflow);
+    }
   }
 
   private async appendMissionEvent(

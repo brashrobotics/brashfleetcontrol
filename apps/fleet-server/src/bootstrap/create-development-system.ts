@@ -22,6 +22,8 @@ import {
   InMemoryTransactionManager,
   InMemoryTrafficPlanRepository,
   InMemoryTrafficRestrictionRepository,
+  InMemoryWorkflowRepository,
+  InMemoryWorkflowResourceReservationRepository,
 } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
 
@@ -87,6 +89,8 @@ export function createDevelopmentSystem() {
     infrastructureResources,
     traffic: new InMemoryTrafficPlanRepository(),
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
+    workflows: new InMemoryWorkflowRepository(),
+    workflowResourceReservations: new InMemoryWorkflowResourceReservationRepository(),
     transactions: new InMemoryTransactionManager(),
     clock: new SystemClock(),
     ids: new RandomIdGenerator(),

@@ -39,3 +39,9 @@ row and map locks make the operation safe across multiple Fleet Core instances.
 claims priority-aged work with expiring leases, retries unavailable assignments
 with bounded exponential backoff, and immediately removes successfully assigned
 or cancelled missions from pending work.
+
+`WorkflowWorker` claims dependency-ready steps every 500 ms. Each step lease is
+safe across multiple Fleet Core instances. Transport/service steps correlate a
+durable mission, wait steps sleep without holding a worker, and service actions
+hold an exclusive infrastructure reservation until success, retry, failure, or
+cancellation.

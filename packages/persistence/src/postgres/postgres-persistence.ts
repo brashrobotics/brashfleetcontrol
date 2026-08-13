@@ -13,6 +13,8 @@ import {
   PostgresRobotRepository,
   PostgresTrafficPlanRepository,
   PostgresTrafficRestrictionRepository,
+  PostgresWorkflowRepository,
+  PostgresWorkflowResourceReservationRepository,
 } from "./postgres-repositories.js";
 import { PostgresTransactionManager } from "./postgres-transaction-manager.js";
 
@@ -29,6 +31,8 @@ export class PostgresPersistence {
   readonly infrastructureResources: PostgresInfrastructureResourceRepository;
   readonly traffic: PostgresTrafficPlanRepository;
   readonly trafficRestrictions: PostgresTrafficRestrictionRepository;
+  readonly workflows: PostgresWorkflowRepository;
+  readonly workflowResourceReservations: PostgresWorkflowResourceReservationRepository;
   readonly transactions: PostgresTransactionManager;
   private readonly startupTimeoutMs: number;
 
@@ -46,6 +50,8 @@ export class PostgresPersistence {
     this.infrastructureResources = new PostgresInfrastructureResourceRepository(this.database);
     this.traffic = new PostgresTrafficPlanRepository(this.database);
     this.trafficRestrictions = new PostgresTrafficRestrictionRepository(this.database);
+    this.workflows = new PostgresWorkflowRepository(this.database);
+    this.workflowResourceReservations = new PostgresWorkflowResourceReservationRepository(this.database);
     this.transactions = new PostgresTransactionManager(this.database);
   }
 

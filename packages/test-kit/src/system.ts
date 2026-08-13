@@ -15,6 +15,8 @@ import {
   InMemoryTransactionManager,
   InMemoryTrafficPlanRepository,
   InMemoryTrafficRestrictionRepository,
+  InMemoryWorkflowRepository,
+  InMemoryWorkflowResourceReservationRepository,
 } from "@brash/persistence";
 import { ManualClock, SequentialIdGenerator } from "./fakes.js";
 import { robotFixture } from "./fixtures.js";
@@ -60,6 +62,8 @@ export function createTestFleetSystem(options: {
   const infrastructureResources = new InMemoryInfrastructureResourceRepository();
   const traffic = new InMemoryTrafficPlanRepository();
   const trafficRestrictions = new InMemoryTrafficRestrictionRepository();
+  const workflows = new InMemoryWorkflowRepository();
+  const workflowResourceReservations = new InMemoryWorkflowResourceReservationRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
     alarms,
@@ -73,6 +77,8 @@ export function createTestFleetSystem(options: {
     infrastructureResources,
     traffic,
     trafficRestrictions,
+    workflows,
+    workflowResourceReservations,
     transactions,
     clock,
     ids,
@@ -83,5 +89,5 @@ export function createTestFleetSystem(options: {
     instanceId: "test-fleet-core",
   }, options.coreOptions);
 
-  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, decisions, events, maps, infrastructureResources, traffic, trafficRestrictions, transactions };
+  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, decisions, events, maps, infrastructureResources, traffic, trafficRestrictions, workflows, workflowResourceReservations, transactions };
 }

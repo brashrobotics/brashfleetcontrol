@@ -5,7 +5,7 @@ export interface Clock {
 }
 
 export interface IdGenerator {
-  next(prefix: "mission" | "command" | "route"): string;
+  next(prefix: "mission" | "command" | "route" | "workflow" | "workflowReservation"): string;
 }
 
 export class SystemClock implements Clock {
@@ -15,7 +15,7 @@ export class SystemClock implements Clock {
 }
 
 export class RandomIdGenerator implements IdGenerator {
-  next(prefix: "mission" | "command" | "route"): string {
+  next(prefix: "mission" | "command" | "route" | "workflow" | "workflowReservation"): string {
     return `${prefix}-${randomUUID()}`;
   }
 }

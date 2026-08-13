@@ -119,6 +119,72 @@ test("concurrent PostgreSQL queue workers claim a queued mission once", {
   }
 });
 
+test("concurrent PostgreSQL workflow workers lease one runnable step once", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const workflowId = `PG-WORKFLOW-${suffix}`;
+  const now = new Date();
+  const firstPersistence = createPersistence(databaseUrl!);
+  const secondPersistence = createPersistence(databaseUrl!);
+  await firstPersistence.migrate();
+
+  try {
+    await firstPersistence.workflows.create({
+      workflowId,
+      name: "PostgreSQL lease conformance",
+      externalReference: `PG-WORKFLOW-REF-${suffix}`,
+      status: "PENDING",
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      failureReason: null,
+    }, [{
+      workflowId,
+      definition: {
+        stepId: "hold",
+        name: "Hold",
+        type: "WAIT",
+        dependsOn: [],
+        timeoutSeconds: 60,
+        maxAttempts: 1,
+        retryDelaySeconds: 1,
+        durationSeconds: 1,
+      },
+      status: "PENDING",
+      attemptCount: 0,
+      missionId: null,
+      resourceReservationId: null,
+      startedAt: null,
+      completedAt: null,
+      nextAttemptAt: now,
+      timeoutAt: null,
+      waitUntil: null,
+      lastError: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }]);
+
+    const claims = await Promise.all([
+      firstPersistence.workflows.claimRunnable(1, { workerId: `A-${suffix}`, claimedAt: now, leaseDurationMs: 30_000 }),
+      secondPersistence.workflows.claimRunnable(1, { workerId: `B-${suffix}`, claimedAt: now, leaseDurationMs: 30_000 }),
+    ]);
+    assert.equal(claims[0].length + claims[1].length, 1);
+    const claimed = claims.flat()[0];
+    assert.equal(claimed.workflowId, workflowId);
+
+    claimed.status = "CANCELLED";
+    claimed.completedAt = now;
+    claimed.leaseOwner = null;
+    claimed.leaseExpiresAt = null;
+    await firstPersistence.workflows.saveStep(claimed);
+    assert.equal((await firstPersistence.workflows.getById(workflowId))?.steps[0].status, "CANCELLED");
+  } finally {
+    await firstPersistence.close();
+    await secondPersistence.close();
+  }
+});
+
 test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap", {
   skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
 }, async () => {
@@ -482,6 +548,8 @@ function createCore(
     infrastructureResources: persistence.infrastructureResources,
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
+    workflows: persistence.workflows,
+    workflowResourceReservations: persistence.workflowResourceReservations,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -514,6 +582,8 @@ function createMultiRobotCore(
     infrastructureResources: persistence.infrastructureResources,
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
+    workflows: persistence.workflows,
+    workflowResourceReservations: persistence.workflowResourceReservations,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -534,12 +604,16 @@ class PrefixedIdGenerator implements IdGenerator {
   private mission = 0;
   private command = 0;
   private route = 0;
+  private workflow = 0;
+  private workflowReservation = 0;
 
   constructor(private readonly prefix: string) {}
 
-  next(kind: "mission" | "command" | "route"): string {
+  next(kind: "mission" | "command" | "route" | "workflow" | "workflowReservation"): string {
     if (kind === "mission") return `${this.prefix}-MISSION-${++this.mission}`;
     if (kind === "command") return `${this.prefix}-COMMAND-${++this.command}`;
-    return `${this.prefix}-ROUTE-${++this.route}`;
+    if (kind === "route") return `${this.prefix}-ROUTE-${++this.route}`;
+    if (kind === "workflow") return `${this.prefix}-WORKFLOW-${++this.workflow}`;
+    return `${this.prefix}-WORKFLOW-RESERVATION-${++this.workflowReservation}`;
   }
 }

@@ -30,6 +30,8 @@ What works today:
 - Operator-initiated mission cancellation with robot confirmation and safe traffic release
 - Durable priority mission queue with aging, retry backoff, and multi-instance worker leases
 - Persistent, deduplicated alarms with severity, acknowledgement, and automatic resolution
+- Durable DAG workflows with transport, wait, charge, inspect, and dock steps
+- Per-step timeout/retry, multi-instance leases, and exclusive service-resource reservations
 
 What is not production-ready yet:
 

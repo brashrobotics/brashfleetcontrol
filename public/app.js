@@ -39,6 +39,7 @@ const fallbackState = {
   recovery: { degradedRobots: 0, offlineRobots: 0, recoveryRequiredMissions: 0, safetyHolds: 0, nextLeaseExpiryAt: null },
   queue: { pendingMissions: 0, dueMissions: 0, leasedMissions: 0, nextAttemptAt: null, entries: [] },
   alarmSummary: { open: 0, acknowledged: 0, critical: 0, warning: 0, alarms: [] },
+  workflows: [],
 };
 
 const destinationStations = {
@@ -98,7 +99,7 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastructureResources, recovery, queue, alarmSummary) {
+function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastructureResources, recovery, queue, alarmSummary, workflows) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -150,6 +151,7 @@ function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastruc
     recovery,
     queue,
     alarmSummary,
+    workflows,
   };
 }
 
@@ -166,6 +168,7 @@ function normalizePreviewSnapshot(snapshot) {
     recovery: snapshot.recovery ?? fallbackState.recovery,
     queue: snapshot.queue ?? fallbackState.queue,
     alarmSummary: snapshot.alarmSummary ?? fallbackState.alarmSummary,
+    workflows: snapshot.workflows ?? [],
   };
 }
 
@@ -448,6 +451,23 @@ function renderMissions() {
     : "Automatic priority queue is clear";
 }
 
+function renderWorkflows() {
+  const workflows = state.workflows ?? [];
+  $("#workflow-summary").textContent = workflows.length
+    ? `${workflows.filter((workflow) => ["PENDING", "RUNNING", "CANCELLING"].includes(workflow.status)).length} active · ${workflows.length} total`
+    : "No multi-step operations";
+  $("#workflow-list").innerHTML = workflows.slice(0, 12).map((workflow) => {
+    const finished = workflow.steps.filter((step) => ["SUCCEEDED", "CANCELLED", "FAILED"].includes(step.status)).length;
+    const cancellable = ["PENDING", "RUNNING", "CANCELLING"].includes(workflow.status);
+    return `<article class="workflow-item ${escapeHtml(workflow.status.toLowerCase())}">
+      <i></i><div><div class="workflow-title"><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(workflow.status)}</span></div>
+      <p>${escapeHtml(workflow.workflowId)} · ${finished}/${workflow.steps.length} steps</p>
+      <div class="workflow-steps">${workflow.steps.map((step) => `<span class="${escapeHtml(step.status.toLowerCase())}" title="${escapeHtml(step.name)}">${escapeHtml(step.type)}</span>`).join("")}</div></div>
+      ${cancellable ? `<button data-cancel-workflow="${escapeHtml(workflow.workflowId)}">Cancel</button>` : ""}
+    </article>`;
+  }).join("") || '<p class="workflow-empty">Create a workflow through <code>POST /api/v1/workflows</code>.</p>';
+}
+
 function formatEventType(type) {
   return String(type).toLowerCase().split("_").map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
 }
@@ -518,6 +538,7 @@ function renderAll() {
   renderRobots();
   renderRobotDetail();
   renderMissions();
+  renderWorkflows();
   renderAlerts();
   renderKpis();
   renderTrafficTopology();
@@ -532,7 +553,7 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse, workflowResponse] = await Promise.all([
     fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
     fetch(`/api/v1/traffic/restrictions?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
@@ -540,10 +561,11 @@ async function refreshCoreSnapshot() {
     fetch("/api/v1/recovery/status", { cache: "no-store" }),
     fetch("/api/v1/dispatch/queue", { cache: "no-store" }),
     fetch("/api/v1/alarms", { cache: "no-store" }),
+    fetch("/api/v1/workflows", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok) throw new Error("Fleet coordination state unavailable");
-  const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, resources, recovery, queue, summary);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok || !workflowResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }, { workflows }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json(), workflowResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, resources, recovery, queue, summary, workflows);
   renderAll();
 }
 
@@ -614,6 +636,19 @@ $("#mission-table").addEventListener("keydown", (event) => {
   if (row && ["Enter", " "].includes(event.key)) {
     event.preventDefault();
     void showMissionTimeline(row.dataset.missionId);
+  }
+});
+$("#workflow-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-cancel-workflow]");
+  if (!button || !confirm(`Cancel workflow ${button.dataset.cancelWorkflow}?`)) return;
+  button.disabled = true;
+  try {
+    const result = await post(`/api/v1/workflows/${encodeURIComponent(button.dataset.cancelWorkflow)}/cancel`);
+    showToast(`${result.workflow.workflowId} ${result.workflow.status.toLowerCase()}`);
+    await refreshCoreSnapshot();
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
   }
 });
 $("#mission-form").addEventListener("submit", async (event) => {

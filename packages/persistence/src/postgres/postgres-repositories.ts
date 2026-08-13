@@ -22,6 +22,12 @@ import type {
   TrafficPlanRepository,
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
+  WorkflowClaimOptions,
+  WorkflowRecord,
+  WorkflowRepository,
+  WorkflowResourceReservationRecord,
+  WorkflowResourceReservationRepository,
+  WorkflowStepRecord,
 } from "@brash/application";
 import type {
   AlarmSeverity,
@@ -33,6 +39,7 @@ import type {
   MissionCommand,
   MissionEventType,
   MissionEventView,
+  WorkflowStepDefinition,
 } from "@brash/contracts";
 import {
   MapTopology,
@@ -171,6 +178,46 @@ interface InfrastructureResourceRow {
   updated_by: string;
   updated_at: Date;
   status_reason: string | null;
+}
+
+interface WorkflowRow {
+  workflow_id: string;
+  name: string;
+  external_reference: string | null;
+  status: WorkflowRecord["status"];
+  created_at: Date;
+  updated_at: Date;
+  completed_at: Date | null;
+  failure_reason: string | null;
+}
+
+interface WorkflowStepRow {
+  workflow_id: string;
+  step_id: string;
+  definition: WorkflowStepDefinition;
+  status: WorkflowStepRecord["status"];
+  attempt_count: number;
+  mission_id: string | null;
+  resource_reservation_id: string | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  next_attempt_at: Date;
+  timeout_at: Date | null;
+  wait_until: Date | null;
+  last_error: string | null;
+  lease_owner: string | null;
+  lease_expires_at: Date | null;
+}
+
+interface WorkflowResourceReservationRow {
+  reservation_id: string;
+  workflow_id: string;
+  step_id: string;
+  resource_id: string;
+  starts_at: Date;
+  ends_at: Date;
+  state: WorkflowResourceReservationRecord["state"];
+  released_at: Date | null;
 }
 
 interface TrafficPlanRow {
@@ -893,6 +940,137 @@ export class PostgresInfrastructureResourceRepository implements InfrastructureR
   }
 }
 
+export class PostgresWorkflowRepository implements WorkflowRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async findByExternalReference(externalReference: string): Promise<WorkflowRecord | null> {
+    const result = await this.database.query<WorkflowRow>("SELECT * FROM workflows WHERE external_reference = $1", [externalReference]);
+    return result.rows[0] ? workflowFromRow(result.rows[0]) : null;
+  }
+
+  async create(workflow: WorkflowRecord, steps: WorkflowStepRecord[]): Promise<void> {
+    await this.database.transaction(async () => {
+      await this.database.query(`
+        INSERT INTO workflows (workflow_id, name, external_reference, status, created_at, updated_at, completed_at, failure_reason)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [workflow.workflowId, workflow.name, workflow.externalReference, workflow.status, workflow.createdAt,
+        workflow.updatedAt, workflow.completedAt, workflow.failureReason]);
+      for (const step of steps) {
+        await this.database.query(`
+          INSERT INTO workflow_steps (
+            workflow_id, step_id, definition, dependencies, status, attempt_count,
+            mission_id, resource_reservation_id, started_at, completed_at,
+            next_attempt_at, timeout_at, wait_until, last_error, lease_owner,
+            lease_expires_at, updated_at
+          ) VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        `, workflowStepValues(step, workflow.updatedAt));
+      }
+    });
+  }
+
+  async getById(workflowId: string): Promise<{ workflow: WorkflowRecord; steps: WorkflowStepRecord[] } | null> {
+    const workflowResult = await this.database.query<WorkflowRow>("SELECT * FROM workflows WHERE workflow_id = $1", [workflowId]);
+    if (!workflowResult.rows[0]) return null;
+    const steps = await this.database.query<WorkflowStepRow>("SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY step_id", [workflowId]);
+    return { workflow: workflowFromRow(workflowResult.rows[0]), steps: steps.rows.map(workflowStepFromRow) };
+  }
+
+  async list(): Promise<WorkflowRecord[]> {
+    const result = await this.database.query<WorkflowRow>("SELECT * FROM workflows ORDER BY created_at DESC, workflow_id");
+    return result.rows.map(workflowFromRow);
+  }
+
+  async claimRunnable(limit: number, options: WorkflowClaimOptions): Promise<WorkflowStepRecord[]> {
+    return this.database.transaction(async () => {
+      const result = await this.database.query<WorkflowStepRow>(`
+        WITH candidates AS (
+          SELECT step.workflow_id, step.step_id
+          FROM workflow_steps AS step
+          JOIN workflows AS workflow ON workflow.workflow_id = step.workflow_id
+          WHERE workflow.status IN ('PENDING', 'RUNNING', 'CANCELLING')
+            AND step.status IN ('PENDING', 'WAITING_RETRY', 'RUNNING')
+            AND step.next_attempt_at <= $2
+            AND (step.lease_expires_at IS NULL OR step.lease_expires_at <= $2)
+            AND NOT EXISTS (
+              SELECT 1
+              FROM unnest(step.dependencies) AS dependency(step_id)
+              LEFT JOIN workflow_steps AS required_step
+                ON required_step.workflow_id = step.workflow_id
+               AND required_step.step_id = dependency.step_id
+              WHERE required_step.status IS DISTINCT FROM 'SUCCEEDED'
+            )
+          ORDER BY (step.status = 'RUNNING') DESC, step.next_attempt_at, step.workflow_id, step.step_id
+          FOR UPDATE OF step SKIP LOCKED
+          LIMIT $1
+        )
+        UPDATE workflow_steps AS step
+        SET lease_owner = $3, lease_expires_at = $2 + ($4 * interval '1 millisecond'), updated_at = $2
+        FROM candidates
+        WHERE step.workflow_id = candidates.workflow_id AND step.step_id = candidates.step_id
+        RETURNING step.*
+      `, [limit, options.claimedAt, options.workerId, options.leaseDurationMs]);
+      return result.rows.map(workflowStepFromRow);
+    });
+  }
+
+  async saveStep(step: WorkflowStepRecord): Promise<void> {
+    await this.database.query(`
+      UPDATE workflow_steps SET definition = $3::jsonb, dependencies = $4, status = $5,
+        attempt_count = $6, mission_id = $7, resource_reservation_id = $8,
+        started_at = $9, completed_at = $10, next_attempt_at = $11,
+        timeout_at = $12, wait_until = $13, last_error = $14,
+        lease_owner = $15, lease_expires_at = $16, updated_at = $17
+      WHERE workflow_id = $1 AND step_id = $2
+    `, workflowStepValues(step, new Date()));
+  }
+
+  async saveWorkflow(workflow: WorkflowRecord): Promise<void> {
+    await this.database.query(`
+      UPDATE workflows SET name = $2, external_reference = $3, status = $4,
+        updated_at = $5, completed_at = $6, failure_reason = $7
+      WHERE workflow_id = $1
+    `, [workflow.workflowId, workflow.name, workflow.externalReference, workflow.status,
+      workflow.updatedAt, workflow.completedAt, workflow.failureReason]);
+  }
+}
+
+export class PostgresWorkflowResourceReservationRepository implements WorkflowResourceReservationRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async getActiveByStep(workflowId: string, stepId: string): Promise<WorkflowResourceReservationRecord | null> {
+    const result = await this.database.query<WorkflowResourceReservationRow>(`
+      SELECT * FROM workflow_resource_reservations
+      WHERE workflow_id = $1 AND step_id = $2 AND state = 'ACTIVE'
+      ORDER BY starts_at DESC LIMIT 1
+    `, [workflowId, stepId]);
+    return result.rows[0] ? workflowResourceReservationFromRow(result.rows[0]) : null;
+  }
+
+  async tryReserve(reservation: WorkflowResourceReservationRecord): Promise<WorkflowResourceReservationRecord | null> {
+    try {
+      const result = await this.database.query<WorkflowResourceReservationRow>(`
+        INSERT INTO workflow_resource_reservations (
+          reservation_id, workflow_id, step_id, resource_id, starts_at, ends_at, state, released_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING *
+      `, [reservation.reservationId, reservation.workflowId, reservation.stepId, reservation.resourceId,
+        reservation.startsAt, reservation.endsAt, reservation.state, reservation.releasedAt]);
+      return workflowResourceReservationFromRow(result.rows[0]);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23P01") return null;
+      throw error;
+    }
+  }
+
+  async release(reservationId: string, at: Date): Promise<WorkflowResourceReservationRecord | null> {
+    const result = await this.database.query<WorkflowResourceReservationRow>(`
+      UPDATE workflow_resource_reservations SET state = 'RELEASED', released_at = COALESCE(released_at, $2)
+      WHERE reservation_id = $1 RETURNING *
+    `, [reservationId, at]);
+    return result.rows[0] ? workflowResourceReservationFromRow(result.rows[0]) : null;
+  }
+}
+
 export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
   constructor(private readonly database: PostgresDatabase) {}
 
@@ -1220,6 +1398,73 @@ function infrastructureResourceFromRow(row: InfrastructureResourceRow): Infrastr
     updatedAt: new Date(row.updated_at),
     statusReason: row.status_reason,
   };
+}
+
+function workflowFromRow(row: WorkflowRow): WorkflowRecord {
+  return {
+    workflowId: row.workflow_id,
+    name: row.name,
+    externalReference: row.external_reference,
+    status: row.status,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    completedAt: row.completed_at ? new Date(row.completed_at) : null,
+    failureReason: row.failure_reason,
+  };
+}
+
+function workflowStepFromRow(row: WorkflowStepRow): WorkflowStepRecord {
+  return {
+    workflowId: row.workflow_id,
+    definition: structuredClone(row.definition),
+    status: row.status,
+    attemptCount: row.attempt_count,
+    missionId: row.mission_id,
+    resourceReservationId: row.resource_reservation_id,
+    startedAt: row.started_at ? new Date(row.started_at) : null,
+    completedAt: row.completed_at ? new Date(row.completed_at) : null,
+    nextAttemptAt: new Date(row.next_attempt_at),
+    timeoutAt: row.timeout_at ? new Date(row.timeout_at) : null,
+    waitUntil: row.wait_until ? new Date(row.wait_until) : null,
+    lastError: row.last_error,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
+  };
+}
+
+function workflowResourceReservationFromRow(row: WorkflowResourceReservationRow): WorkflowResourceReservationRecord {
+  return {
+    reservationId: row.reservation_id,
+    workflowId: row.workflow_id,
+    stepId: row.step_id,
+    resourceId: row.resource_id,
+    startsAt: new Date(row.starts_at),
+    endsAt: new Date(row.ends_at),
+    state: row.state,
+    releasedAt: row.released_at ? new Date(row.released_at) : null,
+  };
+}
+
+function workflowStepValues(step: WorkflowStepRecord, updatedAt: Date): unknown[] {
+  return [
+    step.workflowId,
+    step.definition.stepId,
+    JSON.stringify(step.definition),
+    step.definition.dependsOn,
+    step.status,
+    step.attemptCount,
+    step.missionId,
+    step.resourceReservationId,
+    step.startedAt,
+    step.completedAt,
+    step.nextAttemptAt,
+    step.timeoutAt,
+    step.waitUntil,
+    step.lastError,
+    step.leaseOwner,
+    step.leaseExpiresAt,
+    updatedAt,
+  ];
 }
 
 function familyIdFor(mapId: string): string {

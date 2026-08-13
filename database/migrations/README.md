@@ -72,6 +72,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - A typed factory infrastructure catalog with topology bindings and operational status.
 - Infrastructure resources as first-class traffic reservation targets.
 
+`010_workflow_engine.sql` adds:
+
+- Durable workflow instances and dependency-aware step state.
+- Retry, timeout, wait, mission-correlation, and worker-lease fields.
+- Exclusive service-resource reservations protected by a PostgreSQL overlap constraint.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.
