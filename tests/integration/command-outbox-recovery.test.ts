@@ -28,6 +28,13 @@ import { OutboxRetryWorker } from "../../apps/fleet-server/src/workers/outbox-re
 
 class FailFirstDeliveryAdapter implements RobotAdapter {
   readonly adapterId = "fail-first-delivery";
+  get manifest() {
+    return {
+      ...this.delegate.manifest,
+      adapterId: this.adapterId,
+      displayName: "Fail-first delivery test adapter",
+    };
+  }
   private mustFail = true;
 
   constructor(private readonly delegate: SimulatorAdapter) {}

@@ -7,10 +7,12 @@ import {
   type RobotStateSnapshot,
 } from "@brash/contracts";
 import type {
+  AdapterManifest,
   RobotAdapter,
   RobotAdapterEventHandler,
   Unsubscribe,
 } from "@brash/robot-adapter-sdk";
+import { ROBOT_ADAPTER_SDK_VERSION } from "@brash/robot-adapter-sdk";
 
 export interface SimulatorRobotDefinition {
   descriptor: RobotDescriptor;
@@ -18,6 +20,8 @@ export interface SimulatorRobotDefinition {
 }
 
 export interface SimulatorAdapterOptions {
+  adapterId?: string;
+  displayName?: string;
   now?: () => Date;
   autoAdvance?: boolean;
   startDelayMs?: number;
@@ -31,12 +35,14 @@ interface ActiveCommand {
 }
 
 export class SimulatorAdapter implements RobotAdapter {
-  readonly adapterId = "simulator";
+  readonly adapterId: string;
+  readonly manifest: AdapterManifest;
 
   private readonly descriptors = new Map<string, RobotDescriptor>();
   private readonly states = new Map<string, RobotStateSnapshot>();
   private readonly handlers = new Set<RobotAdapterEventHandler>();
   private readonly commands = new Map<string, ActiveCommand>();
+  private readonly cancellationReceipts = new Map<string, CommandReceipt>();
   private readonly now: () => Date;
   private readonly autoAdvance: boolean;
   private readonly startDelayMs: number;
@@ -46,6 +52,17 @@ export class SimulatorAdapter implements RobotAdapter {
   private connected = false;
 
   constructor(definitions: SimulatorRobotDefinition[], options: SimulatorAdapterOptions = {}) {
+    this.adapterId = options.adapterId ?? "simulator";
+    this.manifest = {
+      sdkVersion: ROBOT_ADAPTER_SDK_VERSION,
+      adapterId: this.adapterId,
+      displayName: options.displayName ?? "BRASH deterministic simulator",
+      adapterVersion: "1.0.0",
+      protocol: "SIMULATOR",
+      vendor: "BRASH",
+      features: ["ROBOT_DISCOVERY", "STATE_POLLING", "STATE_EVENTS", "MISSION_EXECUTION", "MISSION_CANCELLATION", "IDEMPOTENT_COMMANDS"],
+      supportedFleetSchemaVersions: [FLEET_SCHEMA_VERSION],
+    };
     this.now = options.now ?? (() => new Date());
     this.autoAdvance = options.autoAdvance ?? false;
     this.startDelayMs = options.startDelayMs ?? 50;
@@ -126,6 +143,9 @@ export class SimulatorAdapter implements RobotAdapter {
 
   async cancelMission(robotId: string, commandId: string): Promise<CommandReceipt> {
     this.assertConnected();
+    const cancellationKey = `${robotId}:${commandId}`;
+    const duplicate = this.cancellationReceipts.get(cancellationKey);
+    if (duplicate) return structuredClone(duplicate);
     const active = this.commands.get(commandId);
     if (!active || active.command.robotId !== robotId) {
       return {
@@ -139,11 +159,13 @@ export class SimulatorAdapter implements RobotAdapter {
       };
     }
     await this.finishCommand(commandId, "CANCELLED", "Mission cancelled by Fleet Control.");
-    return {
+    const receipt: CommandReceipt = {
       ...active.receipt,
       receivedAt: this.now().toISOString(),
       status: "ACCEPTED",
     };
+    this.cancellationReceipts.set(cancellationKey, receipt);
+    return structuredClone(receipt);
   }
 
   subscribe(handler: RobotAdapterEventHandler): Unsubscribe {

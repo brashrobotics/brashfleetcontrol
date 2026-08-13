@@ -299,6 +299,12 @@ Command rules:
 
 If multiple robot vendors must be supported, plan a [VDA 5050 3.0.0](https://github.com/VDA5050/VDA5050/releases/tag/3.0.0) adapter at the fleet boundary. Keep an adapter layer instead of exposing internal ROS 2 messages as the public API.
 
+The repository now includes a versioned Robot Adapter SDK, a reusable customer
+protocol mapping template, an automated conformance suite, and a composite
+adapter for heterogeneous vendor fleets. See
+[`docs/api/ROBOT_ADAPTER_GUIDE.md`](docs/api/ROBOT_ADAPTER_GUIDE.md) before
+starting a customer-specific integration.
+
 **Exit criterion:** The UI displays a real robot, submits a mission, tracks acknowledgements, and does not create duplicate missions after a network disconnect and reconnect.
 
 ### Phase 5 — Persistent fleet backend and multi-robot traffic
