@@ -199,7 +199,14 @@ export class FleetCore {
   async start(): Promise<void> {
     if (this.started) return;
     await this.dependencies.adapter.connect();
-    this.unsubscribe = this.dependencies.adapter.subscribe((event) => this.handleAdapterEvent(event));
+    let startupEventBuffer: RobotAdapterEvent[] | null = [];
+    this.unsubscribe = this.dependencies.adapter.subscribe((event) => {
+      if (startupEventBuffer) {
+        startupEventBuffer.push(structuredClone(event));
+        return;
+      }
+      return this.handleAdapterEvent(event);
+    });
 
     try {
       this.started = true;
@@ -265,6 +272,16 @@ export class FleetCore {
           await this.dependencies.robots.save(registered);
         });
       }
+
+      // A remote adapter can publish heartbeats or recovered mission events as
+      // soon as it connects. Drain them in arrival order only after inventory
+      // registration, otherwise a valid startup heartbeat can reference a
+      // robot that Fleet has not persisted yet.
+      while (startupEventBuffer.length > 0) {
+        const event = startupEventBuffer.shift();
+        if (event) await this.handleAdapterEvent(event);
+      }
+      startupEventBuffer = null;
     } catch (error) {
       this.unsubscribe?.();
       this.unsubscribe = null;
@@ -1679,15 +1696,31 @@ export class FleetCore {
         const robot = await this.requireRobot(event.state.robotId, true);
         const previousMissionId = robot.activeMissionId;
         const receivedAt = this.dependencies.clock.now();
+        let reportedAvailability = event.state.availability;
+        let reportedActiveMissionId = event.state.activeMissionId;
+        if (previousMissionId
+          && event.state.activeMissionId === null
+          && event.state.availability === "AVAILABLE") {
+          const ownedMission = await this.dependencies.missions.getById(previousMissionId, { forUpdate: true });
+          // A heartbeat captured immediately before command acceptance can arrive
+          // after Fleet has committed its reservation. It is not proof that the
+          // accepted command is clear. Preserve ownership until a correlated
+          // terminal event, or until the explicit recovery path asks the robot
+          // to confirm that the old command is absent.
+          if (ownedMission && ["ASSIGNED", "DISPATCHED", "EXECUTING", "CANCELLING"].includes(ownedMission.state)) {
+            reportedActiveMissionId = previousMissionId;
+            reportedAvailability = robot.availability === "EXECUTING" ? "EXECUTING" : "RESERVED";
+          }
+        }
         const applied = robot.applyTelemetry({
           robotId: event.state.robotId,
           sequence: event.state.sequence,
           observedAt: new Date(event.state.observedAt),
           connection: event.state.connection,
-          availability: event.state.availability,
+          availability: reportedAvailability,
           batteryPercent: event.state.batteryPercent,
           pose: { ...event.state.pose },
-          activeMissionId: event.state.activeMissionId,
+          activeMissionId: reportedActiveMissionId,
         }, receivedAt);
         if (!applied) return;
         const operatorControl = await this.dependencies.robots.getOperatorControl(robot.robotId);

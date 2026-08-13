@@ -12,12 +12,17 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
 import { MetricsRegistry, StructuredLogger } from "@brash/observability";
+import type { RobotAdapter } from "@brash/robot-adapter-sdk";
 import { FleetApi } from "../api/fleet-api.js";
 import { SecuredFleetApi } from "../api/secured-fleet-api.js";
 import { createConfiguredIdentityProvider } from "../modules/identity/access-control.js";
 import { createDevelopmentAdapter, defaultInfrastructureResources } from "./create-development-system.js";
 
-export async function createPostgresDevelopmentSystem(config: DatabaseConfig, siteId = "plant-a") {
+export async function createPostgresDevelopmentSystem(
+  config: DatabaseConfig,
+  siteId = "plant-a",
+  adapter: RobotAdapter = createDevelopmentAdapter(),
+) {
   const persistence = new PostgresPersistence(config);
   try {
     await persistence.migrate();
@@ -28,7 +33,6 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig, si
         await persistence.infrastructureResources.create(resource);
       }
     }
-    const adapter = createDevelopmentAdapter();
     const clock = new SystemClock();
     const instanceId = `fleet-server-${randomUUID()}`;
     const leaderLeaseMs = Number(process.env.FLEET_LEADER_LEASE_MS ?? 15_000);

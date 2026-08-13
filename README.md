@@ -11,6 +11,8 @@ What works today:
 
 - Layered factory map
 - Six simulated robots with near-real-time telemetry
+- Optional out-of-process HTTP robot emulator with movement, battery drain, ordered events, and fault injection
+- VDA 5050 3.0.0 adapter, MQTT 3.1.1 transport, Mosquitto stack, and independent VDA robot emulator
 - Robot selection, filtering, and detail view
 - Mission creation and mission flow
 - Alerts and live event list
@@ -87,6 +89,37 @@ npm run dev:core
 The Fleet Management screen is available at `http://127.0.0.1:4273`; the Fleet
 Core API is served under `http://127.0.0.1:4273/api/v1`. See the [Fleet Core quick start](./docs/api/FLEET_CORE_QUICKSTART.md) for a complete mission example.
 
+To exercise a real process boundary, start the robot emulator and Fleet Core in
+two terminals:
+
+```bash
+# Terminal 1
+npm run dev:emulator
+
+# Terminal 2
+npm run dev:core:emulator
+```
+
+Or run the persistent pilot stack:
+
+```bash
+docker compose --profile pilot up --build
+```
+
+Then open `http://127.0.0.1:4273`. Emulator controls and fault examples are in
+the [robot emulator guide](./apps/robot-simulator/README.md).
+
+Run the end-to-end VDA 5050 path (Mosquitto + three VDA robots + PostgreSQL +
+Fleet Management):
+
+```bash
+docker compose --profile vda up --build -d
+```
+
+Then open `http://127.0.0.1:4275`. This profile is an integration lab, not a
+factory-secure broker configuration. Details and port overrides are in the
+[Compose guide](./deployment/compose/README.md).
+
 Run the tests:
 
 ```powershell
@@ -99,6 +132,7 @@ Run the new Fleet Core validation:
 ```bash
 npm run typecheck
 npm run test:core
+npm run test:vda5050
 ```
 
 ## Target system architecture

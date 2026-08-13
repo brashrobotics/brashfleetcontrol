@@ -17,5 +17,135 @@ services:
       - brash-postgres-data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
 
+  robot-emulator:
+    profiles: ["pilot"]
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    command: ["npm", "run", "dev:emulator"]
+    init: true
+    restart: unless-stopped
+    environment:
+      ROBOT_EMULATOR_HOST: 0.0.0.0
+      ROBOT_EMULATOR_PORT: 4280
+      ROBOT_EMULATOR_START_DELAY_MS: 500
+      ROBOT_EMULATOR_MISSION_DURATION_MS: 8000
+      ROBOT_EMULATOR_MOTION_INTERVAL_MS: 250
+      ROBOT_EMULATOR_HEARTBEAT_MS: 1000
+    ports:
+      - "${ROBOT_EMULATOR_PUBLISHED_PORT:-4280}:4280"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4280/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+
+  fleet-core:
+    profiles: ["pilot"]
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    command: ["npm", "run", "dev:core"]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      robot-emulator:
+        condition: service_healthy
+    environment:
+      FLEET_HOST: 0.0.0.0
+      FLEET_PORT: 4273
+      FLEET_SITE_ID: plant-a
+      FLEET_PERSISTENCE: postgres
+      DATABASE_URL: postgresql://brash:brash@postgres:5432/brash_fleet
+      DATABASE_SCHEMA: brash_pilot_plant_a
+      DATABASE_SSL: "false"
+      FLEET_ROBOT_ADAPTER: http
+      FLEET_ROBOT_ADAPTER_URL: http://robot-emulator:4280
+      FLEET_ROBOT_ADAPTER_TIMEOUT_MS: 5000
+      FLEET_ROBOT_ADAPTER_POLL_MS: 100
+    ports:
+      - "${FLEET_PUBLISHED_PORT:-4273}:4273"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4273/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 10s
+
+  mosquitto:
+    profiles: ["vda"]
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./deployment/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "127.0.0.1:${MQTT_PUBLISHED_PORT:-1883}:1883"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/broker/version' -C 1 -W 3 >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+      start_period: 3s
+
+  vda-robot-emulator:
+    profiles: ["vda"]
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    command: ["npm", "run", "dev:emulator:vda"]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    environment:
+      ROBOT_EMULATOR_MQTT_URL: mqtt://mosquitto:1883
+      ROBOT_EMULATOR_VDA_INTERFACE: vda5050
+      ROBOT_EMULATOR_START_DELAY_MS: 500
+      ROBOT_EMULATOR_MISSION_DURATION_MS: 8000
+      ROBOT_EMULATOR_MOTION_INTERVAL_MS: 250
+      ROBOT_EMULATOR_HEARTBEAT_MS: 1000
+
+  fleet-core-vda:
+    profiles: ["vda"]
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    command: ["npm", "run", "dev:core"]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+      vda-robot-emulator:
+        condition: service_started
+    environment:
+      FLEET_HOST: 0.0.0.0
+      FLEET_PORT: 4273
+      FLEET_SITE_ID: plant-a
+      FLEET_PERSISTENCE: postgres
+      DATABASE_URL: postgresql://brash:brash@postgres:5432/brash_fleet
+      DATABASE_SCHEMA: brash_vda_pilot_plant_a
+      DATABASE_SSL: "false"
+      FLEET_ROBOT_ADAPTER: vda5050
+      FLEET_MQTT_URL: mqtt://mosquitto:1883
+      FLEET_VDA_INTERFACE: vda5050
+      FLEET_VDA_MAJOR_VERSION: v3
+      FLEET_VDA_ACK_TIMEOUT_MS: 5000
+      FLEET_VDA_INITIAL_STATE_TIMEOUT_MS: 10000
+    ports:
+      - "127.0.0.1:${VDA_FLEET_PUBLISHED_PORT:-4275}:4273"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4273/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 15s
+
 volumes:
   brash-postgres-data:

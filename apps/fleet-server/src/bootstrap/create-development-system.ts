@@ -12,6 +12,7 @@ import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } from "@brash/contracts";
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import { MetricsRegistry, StructuredLogger } from "@brash/observability";
+import type { RobotAdapter } from "@brash/robot-adapter-sdk";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryAuditRepository,
@@ -83,8 +84,10 @@ export function createDevelopmentAdapter(): SimulatorAdapter {
   ], { autoAdvance: true, heartbeatIntervalMs: 1_000 });
 }
 
-export function createDevelopmentSystem(siteId = "plant-a") {
-  const adapter = createDevelopmentAdapter();
+export function createDevelopmentSystem(
+  siteId = "plant-a",
+  adapter: RobotAdapter = createDevelopmentAdapter(),
+) {
   const topology = createDefaultPlantTopology();
   const infrastructureResources = new InMemoryInfrastructureResourceRepository(defaultInfrastructureResources());
 

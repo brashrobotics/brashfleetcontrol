@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { loadPersistenceConfig, loadSiteConfig, resolveSecret } from "@brash/config";
 import { createDevelopmentSystem } from "./bootstrap/create-development-system.js";
 import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
+import { createConfiguredRobotAdapter } from "./bootstrap/create-configured-adapter.js";
 import { serveFleetUi } from "./http/static-fleet-ui.js";
 import { OutboxRetryWorker } from "./workers/outbox-retry-worker.js";
 import { FleetRecoveryWorker } from "./workers/fleet-recovery-worker.js";
@@ -15,10 +16,11 @@ import { HttpIntegrationEventPublisher } from "./modules/integrations/http-integ
 
 const persistenceConfig = loadPersistenceConfig();
 const siteConfig = loadSiteConfig();
+const robotAdapter = createConfiguredRobotAdapter();
 const postgresSystem = persistenceConfig.mode === "postgres"
-  ? await createPostgresDevelopmentSystem(persistenceConfig.database!, siteConfig.siteId)
+  ? await createPostgresDevelopmentSystem(persistenceConfig.database!, siteConfig.siteId, robotAdapter)
   : null;
-const system = postgresSystem ?? createDevelopmentSystem(siteConfig.siteId);
+const system = postgresSystem ?? createDevelopmentSystem(siteConfig.siteId, robotAdapter);
 const { core, api, metrics, logger } = system;
 await core.start();
 const workerError = (worker: string) => (error: unknown): void => {
@@ -54,6 +56,7 @@ const integrationOutboxWorker = integrationWebhookUrl ? new IntegrationOutboxWor
 integrationOutboxWorker?.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
+const host = process.env.FLEET_HOST?.trim() || "127.0.0.1";
 const server = createServer(async (incoming, outgoing) => {
   const pathname = new URL(incoming.url ?? "/", `http://127.0.0.1:${port}`).pathname;
   if ((incoming.method === "GET" || incoming.method === "HEAD") && !pathname.startsWith("/api/")) {
@@ -95,8 +98,8 @@ async function shutdown(): Promise<void> {
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGINT", () => void shutdown());
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, host, () => {
   console.log(
-    `BRASH Fleet Control ready (${persistenceConfig.mode}, ${siteConfig.siteId}): http://127.0.0.1:${port}`,
+    `BRASH Fleet Control ready (${persistenceConfig.mode}, ${siteConfig.siteId}, ${robotAdapter.adapterId}): http://127.0.0.1:${port}`,
   );
 });

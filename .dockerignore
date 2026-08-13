@@ -1,0 +1,9 @@
+.git
+.github
+.openai
+node_modules
+dist
+coverage
+.env
+*.log
+brash-fleet-backup-*.dump

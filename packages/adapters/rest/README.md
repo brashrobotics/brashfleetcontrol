@@ -4,15 +4,26 @@
 
 ## Purpose
 
-Provides shared infrastructure for robot systems exposed through REST APIs.
+Provides a production-shaped canonical HTTP boundary for robot systems and the
+out-of-process BRASH robot emulator.
 
 ## Responsibilities
 
-Handle authentication, polling or webhooks, request timeouts, safe retries, rate limits, model mapping, and health checks.
+`HttpRobotAdapter` handles bearer authentication, operation deadlines, robot
+discovery, state polling, ordered event polling, command correlation, canonical
+validation, mission execution, cancellation, and transport reconnects.
+
+Configure it with `FLEET_ROBOT_ADAPTER=http` and
+`FLEET_ROBOT_ADAPTER_URL=http://127.0.0.1:4280` for local development. HTTPS is
+required for non-loopback endpoints unless the caller explicitly enables the
+isolated-development override.
 
 ## Boundaries
 
-Create a dedicated vendor adapter when conditionals or semantics exceed a generic mapping layer.
+This protocol carries BRASH canonical contracts. Create a dedicated mapping
+adapter when a vendor API, MQTT dialect, or VDA 5050 endpoint uses different
+semantics. Network transport acceptance never replaces robot mission acceptance
+or an independent safety function.
 
 ## Completion expectations
 

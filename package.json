@@ -10,12 +10,18 @@
     "dev": "node server.mjs",
     "dev:core": "node --import tsx apps/fleet-server/src/dev.ts",
     "dev:core:postgres": "FLEET_PERSISTENCE=postgres node --import tsx apps/fleet-server/src/dev.ts",
+    "dev:core:emulator": "FLEET_ROBOT_ADAPTER=http FLEET_ROBOT_ADAPTER_URL=http://127.0.0.1:4280 node --import tsx apps/fleet-server/src/dev.ts",
+    "dev:core:vda": "FLEET_ROBOT_ADAPTER=vda5050 node --import tsx apps/fleet-server/src/dev.ts",
+    "dev:emulator": "node --import tsx apps/robot-simulator/src/dev.ts",
+    "dev:emulator:vda": "node --import tsx apps/robot-simulator/src/vda-dev.ts",
     "db:migrate": "node --import tsx scripts/migrate.ts",
     "start": "node server.mjs",
     "build": "npm run typecheck && node --check server.mjs && node --check public/app.js && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run test:core && npm run test:capabilities && npm run test:integrations && npm run test:digital-twin && npm run test:legacy",
-    "test:core": "node --import tsx --test packages/config/src/site-config.test.ts packages/domain/src/map/map-topology.test.ts packages/domain/src/traffic/traffic-scheduler.test.ts packages/domain/src/robot/robot-liveness-policy.test.ts packages/domain/src/mission/mission.test.ts packages/application/src/policies/weighted-dispatch-policy.test.ts packages/observability/src/observability.test.ts packages/persistence/src/postgres/migrations.test.ts tests/contract/adapter-sdk-conformance.test.ts tests/contract/customer-adapter-template.test.ts tests/contract/simulator-adapter.test.ts tests/failure/fleet-recovery.test.ts tests/failure/chaos-resilience.test.ts tests/failure/ha-fencing.test.ts tests/security/oidc-identity-provider.test.ts tests/integration/command-outbox-recovery.test.ts tests/integration/dynamic-route-replanning.test.ts tests/integration/fleet-alarms.test.ts tests/integration/fleet-core-cancellation.test.ts tests/integration/fleet-core-events.test.ts tests/integration/fleet-core-traffic.test.ts tests/integration/fleet-traffic-restrictions.test.ts tests/integration/fleet-map-infrastructure.test.ts tests/integration/mission-dispatch-queue.test.ts tests/integration/operator-recovery.test.ts tests/integration/workflow-engine.test.ts tests/integration/workflow-template-catalog.test.ts tests/integration/work-order-orchestrator.test.ts tests/integration/operational-analytics.test.ts tests/e2e/fleet-core-api.test.ts tests/e2e/fleet-api-security.test.ts",
+    "test:core": "node --import tsx --test packages/config/src/site-config.test.ts packages/domain/src/map/map-topology.test.ts packages/domain/src/traffic/traffic-scheduler.test.ts packages/domain/src/robot/robot-liveness-policy.test.ts packages/domain/src/mission/mission.test.ts packages/application/src/policies/weighted-dispatch-policy.test.ts packages/observability/src/observability.test.ts packages/persistence/src/postgres/migrations.test.ts tests/contract/adapter-sdk-conformance.test.ts tests/contract/customer-adapter-template.test.ts tests/contract/simulator-adapter.test.ts tests/contract/http-robot-emulator.test.ts tests/contract/vda5050-adapter.test.ts tests/failure/fleet-recovery.test.ts tests/failure/chaos-resilience.test.ts tests/failure/ha-fencing.test.ts tests/security/oidc-identity-provider.test.ts tests/integration/command-outbox-recovery.test.ts tests/integration/dynamic-route-replanning.test.ts tests/integration/fleet-alarms.test.ts tests/integration/fleet-core-cancellation.test.ts tests/integration/fleet-core-events.test.ts tests/integration/fleet-core-traffic.test.ts tests/integration/fleet-traffic-restrictions.test.ts tests/integration/fleet-map-infrastructure.test.ts tests/integration/mission-dispatch-queue.test.ts tests/integration/operator-recovery.test.ts tests/integration/workflow-engine.test.ts tests/integration/workflow-template-catalog.test.ts tests/integration/work-order-orchestrator.test.ts tests/integration/operational-analytics.test.ts tests/e2e/fleet-core-api.test.ts tests/e2e/fleet-api-security.test.ts",
+    "test:emulator": "node --import tsx --test tests/contract/http-robot-emulator.test.ts",
+    "test:vda5050": "node --import tsx --test tests/contract/vda5050-adapter.test.ts",
     "test:capabilities": "node --import tsx --test tests/integration/capability-registry.test.ts",
     "test:integrations": "node --import tsx --test tests/integration/integration-event-outbox.test.ts",
     "test:postgres": "node --import tsx --test tests/integration/postgres/postgres-atomic-dispatch.test.ts",
@@ -33,6 +39,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "mqtt": "5.15.2",
     "pg": "^8.23.0"
   }
 }
