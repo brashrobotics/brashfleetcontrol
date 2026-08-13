@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
-import { loadPersistenceConfig, loadSiteConfig } from "@brash/config";
+import { loadPersistenceConfig, loadSiteConfig, resolveSecret } from "@brash/config";
 import { createDevelopmentSystem } from "./bootstrap/create-development-system.js";
 import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
 import { serveFleetUi } from "./http/static-fleet-ui.js";
@@ -46,7 +46,7 @@ const integrationOutboxWorker = integrationWebhookUrl ? new IntegrationOutboxWor
   system.integrationEvents,
   new HttpIntegrationEventPublisher({
     endpoint: integrationWebhookUrl,
-    signingSecret: process.env.FLEET_INTEGRATION_WEBHOOK_SECRET,
+    signingSecret: resolveSecret("FLEET_INTEGRATION_WEBHOOK_SECRET"),
     timeoutMs: Number(process.env.FLEET_INTEGRATION_WEBHOOK_TIMEOUT_MS ?? 10_000),
   }),
   { onError: workerError("integration_outbox") },

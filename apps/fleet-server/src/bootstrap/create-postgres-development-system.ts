@@ -14,7 +14,7 @@ import { PostgresPersistence } from "@brash/persistence";
 import { MetricsRegistry, StructuredLogger } from "@brash/observability";
 import { FleetApi } from "../api/fleet-api.js";
 import { SecuredFleetApi } from "../api/secured-fleet-api.js";
-import { createDevelopmentIdentityProvider } from "../modules/identity/access-control.js";
+import { createConfiguredIdentityProvider } from "../modules/identity/access-control.js";
 import { createDevelopmentAdapter, defaultInfrastructureResources } from "./create-development-system.js";
 
 export async function createPostgresDevelopmentSystem(config: DatabaseConfig, siteId = "plant-a") {
@@ -73,7 +73,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig, si
       leadership: leaderElection.status,
     })), {
       siteId,
-      identities: createDevelopmentIdentityProvider(),
+      identities: createConfiguredIdentityProvider(),
       audit: persistence.audit,
       observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
     });

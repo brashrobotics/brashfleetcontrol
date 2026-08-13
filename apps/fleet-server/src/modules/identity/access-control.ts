@@ -1,5 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FleetPermission, FleetRole, IdentityView } from "@brash/contracts";
+import { resolveSecret } from "@brash/config";
+import { OidcIdentityProvider } from "./oidc-identity-provider.js";
 
 export interface FleetPrincipal extends IdentityView {}
 
@@ -52,10 +54,38 @@ export function hasPermission(principal: FleetPrincipal, permission: FleetPermis
     && (principal.siteIds.includes("*") || principal.siteIds.includes(siteId));
 }
 
-export function createDevelopmentIdentityProvider(serialized = process.env.FLEET_API_TOKENS): StaticTokenIdentityProvider {
+export function permissionsForRole(role: FleetRole): FleetPermission[] {
+  return [...ROLE_PERMISSIONS[role]];
+}
+
+export function createConfiguredIdentityProvider(environment: NodeJS.ProcessEnv = process.env): IdentityProvider {
+  const issuer = environment.FLEET_OIDC_ISSUER?.trim();
+  const audience = environment.FLEET_OIDC_AUDIENCE?.trim();
+  const jwksUri = environment.FLEET_OIDC_JWKS_URI?.trim();
+  if (issuer || audience || jwksUri) {
+    if (!issuer || !audience || !jwksUri) {
+      throw new Error("FLEET_OIDC_ISSUER, FLEET_OIDC_AUDIENCE, and FLEET_OIDC_JWKS_URI must be configured together.");
+    }
+    return new OidcIdentityProvider({
+      issuer,
+      audience,
+      jwksUri,
+      roleClaim: environment.FLEET_OIDC_ROLE_CLAIM?.trim() || undefined,
+      sitesClaim: environment.FLEET_OIDC_SITES_CLAIM?.trim() || undefined,
+      subjectTypeClaim: environment.FLEET_OIDC_SUBJECT_TYPE_CLAIM?.trim() || undefined,
+      allowInsecureHttp: environment.NODE_ENV !== "production",
+    });
+  }
+  return createDevelopmentIdentityProvider(resolveSecret("FLEET_API_TOKENS", environment), environment);
+}
+
+export function createDevelopmentIdentityProvider(
+  serialized = resolveSecret("FLEET_API_TOKENS"),
+  environment: NodeJS.ProcessEnv = process.env,
+): StaticTokenIdentityProvider {
   if (serialized) return new StaticTokenIdentityProvider(parseTokenIdentities(serialized));
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("FLEET_API_TOKENS is required when NODE_ENV=production.");
+  if (environment.NODE_ENV === "production") {
+    throw new Error("OIDC configuration or FLEET_API_TOKENS(_FILE) is required when NODE_ENV=production.");
   }
   return new StaticTokenIdentityProvider([
     { token: "brash-dev-viewer", subjectId: "dev-viewer", displayName: "Development Viewer", subjectType: "USER", role: "VIEWER", siteIds: ["*"] },

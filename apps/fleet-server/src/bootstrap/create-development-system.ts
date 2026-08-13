@@ -35,7 +35,7 @@ import {
 } from "@brash/persistence";
 import { FleetApi } from "../api/fleet-api.js";
 import { SecuredFleetApi } from "../api/secured-fleet-api.js";
-import { createDevelopmentIdentityProvider } from "../modules/identity/access-control.js";
+import { createConfiguredIdentityProvider } from "../modules/identity/access-control.js";
 
 function simulatorRobot(input: {
   robotId: string;
@@ -132,7 +132,7 @@ export function createDevelopmentSystem(siteId = "plant-a") {
     leadership: leaderElection.status,
   })), {
     siteId,
-    identities: createDevelopmentIdentityProvider(),
+    identities: createConfiguredIdentityProvider(),
     audit,
     observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
   });
