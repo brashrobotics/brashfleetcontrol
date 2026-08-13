@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FLEET_SCHEMA_VERSION, type MissionCommand } from "@brash/contracts";
+import { FLEET_SCHEMA_VERSION, type CommandReceipt, type MissionCommand } from "@brash/contracts";
 import {
   CompositeRobotAdapter,
   assertAdapterConformance,
+  issueAdapterCertificate,
   mapVendorCapabilities,
+  runAdapterConformance,
+  verifyAdapterCertificate,
 } from "@brash/robot-adapter-sdk";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import { ManualClock, robotFixture } from "@brash/test-kit";
@@ -17,8 +20,45 @@ test("simulator passes the shared Robot Adapter SDK conformance suite", async ()
     },
   });
   assert.equal(report.compliant, true);
-  assert.equal(report.checks.length, 4);
+  assert.equal(report.checks.length, 9);
   assert.ok(report.checks.every((check) => check.status === "PASS"));
+  assert.equal(report.certificationVersion, "1.0");
+  assert.deepEqual(report.checks.map((check) => check.code), [
+    "MANIFEST_COMPATIBILITY", "CONNECTION_INVENTORY", "COMMAND_IDEMPOTENCY", "COMMAND_ID_COLLISION_FENCING", "RECEIPT_LOSS_RECOVERY",
+    "CANCELLATION_AND_EVENTS", "RECONNECT_RECONCILIATION", "STATE_SEQUENCE_MONOTONICITY", "OPERATION_DEADLINES",
+  ]);
+  const key = "adapter-certification-test-key-32-bytes-minimum";
+  const issuedAt = new Date("2026-08-13T10:00:00.000Z");
+  const certificate = issueAdapterCertificate(report, "qa-approver", key, { issuedAt, validityDays: 90 });
+  assert.deepEqual(verifyAdapterCertificate(certificate, key, issuedAt), { valid: true, reason: null });
+  const tampered = structuredClone(certificate);
+  tampered.adapterVersion = "tampered";
+  assert.equal(verifyAdapterCertificate(tampered, key, issuedAt).valid, false);
+  assert.equal(verifyAdapterCertificate(certificate, key, new Date("2027-01-01T00:00:00.000Z")).reason, "Certificate has expired.");
+});
+
+test("certification identifies an adapter that ignores command ID collisions", async () => {
+  class CollisionBlindSimulator extends SimulatorAdapter {
+    private readonly cached = new Map<string, CommandReceipt>();
+
+    override async executeMission(command: MissionCommand): Promise<CommandReceipt> {
+      const duplicate = this.cached.get(command.commandId);
+      if (duplicate) return structuredClone(duplicate);
+      const receipt = await super.executeMission(command);
+      this.cached.set(command.commandId, structuredClone(receipt));
+      return receipt;
+    }
+  }
+
+  const report = await runAdapterConformance({
+    createAdapter: () => new CollisionBlindSimulator([robotFixture({ robotId: "NONCOMPLIANT-01" })]),
+  });
+  assert.equal(report.compliant, false);
+  assert.equal(report.checks.find((check) => check.code === "COMMAND_ID_COLLISION_FENCING")?.status, "FAIL");
+  assert.throws(
+    () => issueAdapterCertificate(report, "qa-approver", "adapter-certification-test-key-32-bytes-minimum"),
+    /fully compliant/,
+  );
 });
 
 test("composite adapter discovers and routes commands across vendor adapters", async () => {
@@ -78,4 +118,3 @@ test("vendor capabilities map to normalized canonical constraints", () => {
     allowedZones: ["production", "raw_material"],
   });
 });
-

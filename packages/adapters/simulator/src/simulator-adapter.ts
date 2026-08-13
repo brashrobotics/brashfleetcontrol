@@ -12,7 +12,7 @@ import type {
   RobotAdapterEventHandler,
   Unsubscribe,
 } from "@brash/robot-adapter-sdk";
-import { ROBOT_ADAPTER_SDK_VERSION } from "@brash/robot-adapter-sdk";
+import { AdapterContractError, ROBOT_ADAPTER_SDK_VERSION } from "@brash/robot-adapter-sdk";
 
 export interface SimulatorRobotDefinition {
   descriptor: RobotDescriptor;
@@ -32,6 +32,7 @@ export interface SimulatorAdapterOptions {
 interface ActiveCommand {
   command: MissionCommand;
   receipt: CommandReceipt;
+  fingerprint: string;
 }
 
 export class SimulatorAdapter implements RobotAdapter {
@@ -107,7 +108,11 @@ export class SimulatorAdapter implements RobotAdapter {
   async executeMission(command: MissionCommand): Promise<CommandReceipt> {
     this.assertConnected();
     const duplicate = this.commands.get(command.commandId);
-    if (duplicate) return structuredClone(duplicate.receipt);
+    const fingerprint = JSON.stringify(command);
+    if (duplicate) {
+      if (duplicate.fingerprint !== fingerprint) throw new AdapterContractError("COMMAND_ID_REUSED", `Command ID ${command.commandId} was reused with different content.`);
+      return structuredClone(duplicate.receipt);
+    }
 
     const state = this.states.get(command.robotId);
     const descriptor = this.descriptors.get(command.robotId);
@@ -123,7 +128,7 @@ export class SimulatorAdapter implements RobotAdapter {
       receivedAt: this.now().toISOString(),
       ...(rejection ? { reason: rejection } : {}),
     };
-    this.commands.set(command.commandId, { command: structuredClone(command), receipt });
+    this.commands.set(command.commandId, { command: structuredClone(command), receipt, fingerprint });
 
     if (!rejection) {
       const observedAt = this.now().toISOString();
