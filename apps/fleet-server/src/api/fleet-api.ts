@@ -42,6 +42,10 @@ export class FleetApi {
         return json(await this.core.getSnapshot());
       }
 
+      if (request.method === "GET" && url.pathname === "/api/v1/analytics/operations") {
+        return json({ analytics: await this.core.getOperationalAnalytics() });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/v1/dispatch/queue") {
         return json({ queue: await this.core.getDispatchQueue() });
       }

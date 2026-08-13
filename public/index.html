@@ -142,6 +142,16 @@
           <div class="drawer-heading"><div><span class="section-index">06</span><div><h2>Workflow orchestration</h2><p id="workflow-summary">Durable multi-step operations</p></div></div><span class="workflow-engine-state"><i></i> DAG ENGINE</span></div>
           <div id="workflow-list" class="workflow-list" aria-live="polite"></div>
         </section>
+
+        <section class="analytics-panel panel" id="analytics-panel">
+          <div class="drawer-heading"><div><span class="section-index">07</span><div><h2>Operations analytics</h2><p id="analytics-mission-note">Live mission and utilization indicators</p></div></div><span class="analytics-state">LIVE AGGREGATE</span></div>
+          <div class="analytics-grid">
+            <article><span>ROBOT UTILIZATION</span><strong id="analytics-utilization">0%</strong><div class="analytics-bar"><i id="utilization-bar"></i></div></article>
+            <article><span>MISSION COMPLETION</span><strong id="analytics-completion">0%</strong><div class="analytics-bar"><i id="completion-bar"></i></div></article>
+            <article><span>ACTIVE WORKFLOWS</span><strong id="analytics-active-workflows">0</strong><small><b id="analytics-retries">0</b> step retries</small></article>
+            <article><span>DELAYED ROUTES</span><strong id="analytics-delays">0</strong><small><b id="analytics-wait">0</b>s scheduled wait</small></article>
+          </div>
+        </section>
       </main>
     </div>
 

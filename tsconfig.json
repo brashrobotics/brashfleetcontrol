@@ -19,7 +19,8 @@
       "@brash/customer-adapter-template": ["./packages/adapters/customer-template/src/index.ts"],
       "@brash/persistence": ["./packages/persistence/src/index.ts"],
       "@brash/config": ["./packages/config/src/index.ts"],
-      "@brash/test-kit": ["./packages/test-kit/src/index.ts"]
+      "@brash/test-kit": ["./packages/test-kit/src/index.ts"],
+      "@brash/observability": ["./packages/observability/src/index.ts"]
     }
   },
   "include": [

@@ -9,6 +9,7 @@ import {
 import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } from "@brash/contracts";
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
+import { MetricsRegistry, StructuredLogger } from "@brash/observability";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryAuditRepository,
@@ -105,11 +106,14 @@ export function createDevelopmentSystem() {
   });
 
   const audit = new InMemoryAuditRepository();
+  const metrics = new MetricsRegistry();
+  const logger = new StructuredLogger("brash-fleet-core");
   const api = new SecuredFleetApi(new FleetApi(core), {
     identities: createDevelopmentIdentityProvider(),
     audit,
+    observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
   });
-  return { core, api, adapter, audit };
+  return { core, api, adapter, audit, metrics, logger };
 }
 
 export function defaultInfrastructureResources(now = new Date()): InfrastructureResourceRecord[] {

@@ -21,6 +21,7 @@ import {
   type MissionEventType,
   type MissionEventView,
   type MissionView,
+  type OperationalAnalyticsView,
   type RobotAdapterEvent,
   type TrafficPlanView,
   type TrafficRestrictionView,
@@ -1092,6 +1093,64 @@ export class FleetCore {
     };
   }
 
+  async getOperationalAnalytics(): Promise<OperationalAnalyticsView> {
+    const [snapshot, workflows, alarms, queue] = await Promise.all([
+      this.getSnapshot(),
+      this.listWorkflows(),
+      this.getAlarms(),
+      this.getDispatchQueue(),
+    ]);
+    const mapIds = new Set<string>();
+    snapshot.robots.forEach((robot) => mapIds.add(robot.state.pose.mapId));
+    snapshot.missions.forEach((mission) => mapIds.add(mission.pickup.mapId));
+    const plans = (await Promise.all([...mapIds].map((mapId) => this.dependencies.traffic.listByMap(mapId)))).flat();
+    const activePlans = plans.filter((plan) => plan.status !== "RELEASED");
+    const utilized = snapshot.robots.filter((robot) => ["RESERVED", "EXECUTING"].includes(robot.state.availability)).length;
+    const completed = snapshot.missions.filter((mission) => mission.state === "COMPLETED").length;
+    const failed = snapshot.missions.filter((mission) => mission.state === "FAILED").length;
+    const terminalForRate = completed + failed;
+    return {
+      generatedAt: this.dependencies.clock.now().toISOString(),
+      robots: {
+        total: snapshot.robots.length,
+        online: snapshot.robots.filter((robot) => robot.state.connection === "ONLINE").length,
+        degraded: snapshot.robots.filter((robot) => robot.state.connection === "DEGRADED").length,
+        offline: snapshot.robots.filter((robot) => robot.state.connection === "OFFLINE").length,
+        available: snapshot.robots.filter((robot) => robot.state.availability === "AVAILABLE").length,
+        utilized,
+        utilizationPercent: percent(utilized, snapshot.robots.length),
+      },
+      missions: {
+        total: snapshot.missions.length,
+        active: snapshot.missions.filter((mission) => ["ASSIGNED", "DISPATCHED", "EXECUTING", "RECOVERY_REQUIRED", "CANCELLING"].includes(mission.state)).length,
+        queued: queue.pendingMissions,
+        completed,
+        failed,
+        cancelled: snapshot.missions.filter((mission) => mission.state === "CANCELLED").length,
+        completionRatePercent: percent(completed, terminalForRate),
+      },
+      workflows: {
+        total: workflows.length,
+        active: workflows.filter((workflow) => ["PENDING", "RUNNING", "CANCELLING"].includes(workflow.status)).length,
+        succeeded: workflows.filter((workflow) => workflow.status === "SUCCEEDED").length,
+        failed: workflows.filter((workflow) => workflow.status === "FAILED").length,
+        retryCount: workflows.flatMap((workflow) => workflow.steps).reduce((sum, step) => sum + Math.max(0, step.attemptCount - 1), 0),
+      },
+      traffic: {
+        activeRoutes: activePlans.length,
+        activeReservations: activePlans.flatMap((plan) => plan.reservations).filter((reservation) => reservation.state !== "RELEASED").length,
+        delayedRoutes: activePlans.filter((plan) => plan.totalWaitSeconds > 0).length,
+        scheduledWaitSeconds: activePlans.reduce((sum, plan) => sum + plan.totalWaitSeconds, 0),
+      },
+      alarms: {
+        open: alarms.open,
+        acknowledged: alarms.acknowledged,
+        critical: alarms.critical,
+        warning: alarms.warning,
+      },
+    };
+  }
+
   async handleAdapterEvent(event: RobotAdapterEvent): Promise<void> {
     let redispatchMissionId: string | null = null;
     await this.dependencies.transactions.runExclusive(async () => {
@@ -1910,4 +1969,8 @@ export class FleetCore {
 
 function isUniqueConstraintViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
+}
+
+function percent(numerator: number, denominator: number): number {
+  return denominator === 0 ? 0 : Math.round((numerator / denominator) * 10_000) / 100;
 }

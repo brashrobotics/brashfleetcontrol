@@ -34,6 +34,7 @@ What works today:
 - Per-step timeout/retry, multi-instance leases, and exclusive service-resource reservations
 - Bearer-token authentication, role/site authorization, and fail-closed mutation auditing
 - Append-only PostgreSQL audit history with actor binding and correlation IDs
+- Prometheus metrics, redacted JSON logs, alert rules, and live operations analytics
 
 What is not production-ready yet:
 
@@ -41,7 +42,7 @@ What is not production-ready yet:
 - Real localization and navigation
 - Priority preemption, automatic cancellation retry, and dynamic obstacle replanning
 - Device certificates, signed OTA updates, and rollback
-- Production observability and black-box recording
+- Distributed tracing and robot black-box recording
 - Conformity assessment and on-site safety validation
 
 ## Run locally

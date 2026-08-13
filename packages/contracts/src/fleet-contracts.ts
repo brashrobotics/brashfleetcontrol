@@ -153,6 +153,7 @@ export type FleetPermission =
   | "traffic:manage"
   | "map:manage"
   | "resource:manage"
+  | "observability:read"
   | "audit:read";
 
 export interface IdentityView {
@@ -181,6 +182,47 @@ export interface AuditEventView {
   requestPath: string;
   siteId: string | null;
   metadata: Record<string, unknown>;
+}
+
+export interface OperationalAnalyticsView {
+  generatedAt: string;
+  robots: {
+    total: number;
+    online: number;
+    degraded: number;
+    offline: number;
+    available: number;
+    utilized: number;
+    utilizationPercent: number;
+  };
+  missions: {
+    total: number;
+    active: number;
+    queued: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    completionRatePercent: number;
+  };
+  workflows: {
+    total: number;
+    active: number;
+    succeeded: number;
+    failed: number;
+    retryCount: number;
+  };
+  traffic: {
+    activeRoutes: number;
+    activeReservations: number;
+    delayedRoutes: number;
+    scheduledWaitSeconds: number;
+  };
+  alarms: {
+    open: number;
+    acknowledged: number;
+    critical: number;
+    warning: number;
+  };
 }
 
 export interface RobotView extends RobotDescriptor {

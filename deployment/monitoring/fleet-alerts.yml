@@ -1,0 +1,31 @@
+groups:
+  - name: brash-fleet
+    rules:
+      - alert: FleetApiHighErrorRate
+        expr: sum(rate(brash_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(brash_http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Fleet API 5xx rate exceeds 5%
+          runbook: docs/operations/OBSERVABILITY_RUNBOOK.md#fleetapihigherrorrate
+      - alert: FleetRobotOffline
+        expr: brash_fleet_robots{state="offline"} > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: One or more fleet robots are offline
+          runbook: docs/operations/OBSERVABILITY_RUNBOOK.md#fleetrobotoffline
+      - alert: FleetMissionQueueStalled
+        expr: brash_fleet_missions{state="queued"} > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Missions have remained queued for at least ten minutes
+          runbook: docs/operations/OBSERVABILITY_RUNBOOK.md#fleetmissionqueuestalled
+      - alert: FleetCriticalAlarmOpen
+        expr: brash_fleet_alarms{state="critical"} > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Fleet Core reports a critical operational alarm
+          runbook: docs/operations/OBSERVABILITY_RUNBOOK.md#fleetcriticalalarmopen

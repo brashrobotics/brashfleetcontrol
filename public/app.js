@@ -40,6 +40,7 @@ const fallbackState = {
   queue: { pendingMissions: 0, dueMissions: 0, leasedMissions: 0, nextAttemptAt: null, entries: [] },
   alarmSummary: { open: 0, acknowledged: 0, critical: 0, warning: 0, alarms: [] },
   workflows: [],
+  analytics: { robots: { utilizationPercent: 0 }, missions: { completionRatePercent: 0, active: 0, queued: 0 }, workflows: { active: 0, retryCount: 0 }, traffic: { delayedRoutes: 0, scheduledWaitSeconds: 0 } },
 };
 
 const destinationStations = {
@@ -107,7 +108,7 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastructureResources, recovery, queue, alarmSummary, workflows) {
+function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastructureResources, recovery, queue, alarmSummary, workflows, analytics) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -160,6 +161,7 @@ function adaptCoreSnapshot(snapshot, topology, traffic, restrictions, infrastruc
     queue,
     alarmSummary,
     workflows,
+    analytics,
   };
 }
 
@@ -177,6 +179,7 @@ function normalizePreviewSnapshot(snapshot) {
     queue: snapshot.queue ?? fallbackState.queue,
     alarmSummary: snapshot.alarmSummary ?? fallbackState.alarmSummary,
     workflows: snapshot.workflows ?? [],
+    analytics: snapshot.analytics ?? fallbackState.analytics,
   };
 }
 
@@ -476,6 +479,22 @@ function renderWorkflows() {
   }).join("") || '<p class="workflow-empty">Create a workflow through <code>POST /api/v1/workflows</code>.</p>';
 }
 
+function renderAnalytics() {
+  const analytics = state.analytics ?? fallbackState.analytics;
+  const values = {
+    "analytics-utilization": analytics.robots.utilizationPercent,
+    "analytics-completion": analytics.missions.completionRatePercent,
+    "analytics-active-workflows": analytics.workflows.active,
+    "analytics-retries": analytics.workflows.retryCount,
+    "analytics-delays": analytics.traffic.delayedRoutes,
+    "analytics-wait": analytics.traffic.scheduledWaitSeconds,
+  };
+  Object.entries(values).forEach(([id, value]) => { $(`#${id}`).textContent = id.includes("utilization") || id.includes("completion") ? `${value}%` : String(value); });
+  $("#utilization-bar").style.width = `${Math.min(100, analytics.robots.utilizationPercent)}%`;
+  $("#completion-bar").style.width = `${Math.min(100, analytics.missions.completionRatePercent)}%`;
+  $("#analytics-mission-note").textContent = `${analytics.missions.active} active · ${analytics.missions.queued} queued`;
+}
+
 function formatEventType(type) {
   return String(type).toLowerCase().split("_").map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
 }
@@ -547,6 +566,7 @@ function renderAll() {
   renderRobotDetail();
   renderMissions();
   renderWorkflows();
+  renderAnalytics();
   renderAlerts();
   renderKpis();
   renderTrafficTopology();
@@ -561,7 +581,7 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse, workflowResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, restrictionResponse, infrastructureResponse, recoveryResponse, queueResponse, alarmResponse, workflowResponse, analyticsResponse] = await Promise.all([
     fleetFetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fleetFetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
     fleetFetch(`/api/v1/traffic/restrictions?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
@@ -570,10 +590,11 @@ async function refreshCoreSnapshot() {
     fleetFetch("/api/v1/dispatch/queue", { cache: "no-store" }),
     fleetFetch("/api/v1/alarms", { cache: "no-store" }),
     fleetFetch("/api/v1/workflows", { cache: "no-store" }),
+    fleetFetch("/api/v1/analytics/operations", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok || !workflowResponse.ok) throw new Error("Fleet coordination state unavailable");
-  const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }, { workflows }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json(), workflowResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, resources, recovery, queue, summary, workflows);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !restrictionResponse.ok || !infrastructureResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok || !workflowResponse.ok || !analyticsResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { restrictions }, { resources }, { recovery }, { queue }, { summary }, { workflows }, { analytics }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), restrictionResponse.json(), infrastructureResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json(), workflowResponse.json(), analyticsResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, restrictions, resources, recovery, queue, summary, workflows, analytics);
   renderAll();
 }
 
@@ -791,7 +812,7 @@ $("#infrastructure-resource-list").addEventListener("click", async (event) => {
 });
 $("#notification-button").addEventListener("click", () => $(".alerts-card").scrollIntoView({ behavior: "smooth", block: "center" }));
 $("#plant-select").addEventListener("change", (event) => showToast(`Switched to ${event.target.value}`));
-$$('.rail-item[data-view]').forEach((button) => button.addEventListener("click", () => { $$('.rail-item[data-view]').forEach((item) => item.classList.toggle("active", item === button)); const view = button.dataset.view; if (view === "missions") $("#mission-drawer").scrollIntoView({ behavior: "smooth" }); else if (view === "robots") $("#robot-detail").scrollIntoView({ behavior: "smooth" }); else if (view === "analytics") showToast("The analytics module is planned for the second release"); else $("#map-stage").scrollIntoView({ behavior: "smooth", block: "center" }); }));
+$$('.rail-item[data-view]').forEach((button) => button.addEventListener("click", () => { $$('.rail-item[data-view]').forEach((item) => item.classList.toggle("active", item === button)); const view = button.dataset.view; if (view === "missions") $("#mission-drawer").scrollIntoView({ behavior: "smooth" }); else if (view === "robots") $("#robot-detail").scrollIntoView({ behavior: "smooth" }); else if (view === "analytics") $("#analytics-panel").scrollIntoView({ behavior: "smooth", block: "center" }); else $("#map-stage").scrollIntoView({ behavior: "smooth", block: "center" }); }));
 setInterval(() => { $("#clock").textContent = new Date().toLocaleTimeString("en-GB", { hour12: false }); }, 1000);
 window.addEventListener("resize", () => renderTrafficTopology());
 window.addEventListener("beforeunload", () => clearInterval(pollTimer));

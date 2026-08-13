@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InMemoryAuditRepository } from "@brash/persistence";
+import { MetricsRegistry, StructuredLogger } from "@brash/observability";
 import { createTestFleetSystem, transportMissionFixture } from "@brash/test-kit";
 import { FleetApi } from "../../apps/fleet-server/src/api/fleet-api.js";
 import { SecuredFleetApi } from "../../apps/fleet-server/src/api/secured-fleet-api.js";
@@ -13,6 +14,8 @@ const ADMIN_TOKEN = "test-admin-token-123";
 test("secured API enforces authentication, RBAC, actor binding, and immutable audit events", async () => {
   const { core, clock } = createTestFleetSystem();
   const audit = new InMemoryAuditRepository();
+  const metrics = new MetricsRegistry();
+  const logs: string[] = [];
   let auditId = 0;
   const api = new SecuredFleetApi(new FleetApi(core), {
     identities: new StaticTokenIdentityProvider([
@@ -23,6 +26,11 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
     audit,
     now: () => clock.now(),
     nextAuditEventId: () => `audit-${++auditId}`,
+    observability: {
+      metrics,
+      logger: new StructuredLogger("security-test", (line) => logs.push(line), () => clock.now(), "DEBUG"),
+      collectOperationalAnalytics: () => core.getOperationalAnalytics(),
+    },
   });
   await core.start();
 
@@ -69,6 +77,15 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
     const deniedEvents = await audit.list({ limit: 10, actorId: "viewer-1" });
     assert.equal(deniedEvents.length, 1);
     assert.equal(deniedEvents[0].outcome, "DENIED");
+
+    const viewerMetrics = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/metrics", VIEWER_TOKEN));
+    assert.equal(viewerMetrics.status, 403);
+    const adminMetrics = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/metrics", ADMIN_TOKEN));
+    assert.equal(adminMetrics.status, 200);
+    assert.match(await adminMetrics.text(), /brash_http_requests_total/);
+    assert.match(metrics.renderPrometheus(), /route="\/api\/v1\/traffic\/restrictions"/);
+    assert.ok(logs.some((line) => line.includes(correlationId)));
+    assert.ok(logs.every((line) => !line.includes(OPERATOR_TOKEN)));
   } finally {
     await core.stop();
   }

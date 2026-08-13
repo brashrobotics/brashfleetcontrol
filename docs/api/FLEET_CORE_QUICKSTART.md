@@ -277,6 +277,21 @@ Use `GET /api/v1/workflows` for the operator list,
 Charge, dock, and inspection steps require a matching available
 `SERVICE_EXCLUSIVE` infrastructure resource.
 
+## Observe the fleet
+
+The dashboard analytics panel reads `GET /api/v1/analytics/operations`. Prometheus
+can scrape the protected text endpoint with an admin or monitoring service token:
+
+```bash
+curl -H "authorization: Bearer $FLEET_TOKEN" \
+  http://127.0.0.1:4273/api/v1/metrics
+```
+
+HTTP metrics use normalized route templates, so mission, workflow, and robot IDs
+do not create unbounded label cardinality. Application logs are one-line JSON and
+carry the same `x-correlation-id` returned to clients. See the
+[observability runbook](../operations/OBSERVABILITY_RUNBOOK.md).
+
 ## Verify the implementation
 
 ```bash

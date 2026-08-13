@@ -9,6 +9,7 @@ import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
+import { MetricsRegistry, StructuredLogger } from "@brash/observability";
 import { FleetApi } from "../api/fleet-api.js";
 import { SecuredFleetApi } from "../api/secured-fleet-api.js";
 import { createDevelopmentIdentityProvider } from "../modules/identity/access-control.js";
@@ -49,11 +50,14 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       instanceId: `fleet-server-${randomUUID()}`,
     });
 
+    const metrics = new MetricsRegistry();
+    const logger = new StructuredLogger("brash-fleet-core");
     const api = new SecuredFleetApi(new FleetApi(core), {
       identities: createDevelopmentIdentityProvider(),
       audit: persistence.audit,
+      observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
     });
-    return { core, api, adapter, persistence };
+    return { core, api, adapter, persistence, metrics, logger };
   } catch (error) {
     await persistence.close();
     throw error;

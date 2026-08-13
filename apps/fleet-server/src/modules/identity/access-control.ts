@@ -20,8 +20,8 @@ const ROLE_PERMISSIONS: Record<FleetRole, readonly FleetPermission[]> = {
   VIEWER: ["fleet:read"],
   OPERATOR: ["fleet:read", "mission:create", "mission:cancel", "workflow:create", "workflow:cancel", "alarm:acknowledge", "traffic:manage", "resource:manage"],
   DISPATCHER: ["fleet:read", "mission:create", "mission:dispatch", "mission:cancel", "workflow:create", "workflow:cancel"],
-  FLEET_ADMIN: ["fleet:read", "mission:create", "mission:dispatch", "mission:cancel", "workflow:create", "workflow:cancel", "alarm:acknowledge", "traffic:manage", "map:manage", "resource:manage", "audit:read"],
-  INTEGRATION: ["fleet:read", "mission:create", "workflow:create"],
+  FLEET_ADMIN: ["fleet:read", "mission:create", "mission:dispatch", "mission:cancel", "workflow:create", "workflow:cancel", "alarm:acknowledge", "traffic:manage", "map:manage", "resource:manage", "observability:read", "audit:read"],
+  INTEGRATION: ["fleet:read", "mission:create", "workflow:create", "observability:read"],
 };
 
 export class StaticTokenIdentityProvider implements IdentityProvider {

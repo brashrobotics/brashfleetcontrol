@@ -14,15 +14,19 @@ const postgresSystem = persistenceConfig.mode === "postgres"
   ? await createPostgresDevelopmentSystem(persistenceConfig.database!)
   : null;
 const system = postgresSystem ?? createDevelopmentSystem();
-const { core, api } = system;
+const { core, api, metrics, logger } = system;
 await core.start();
-const outboxWorker = new OutboxRetryWorker(core);
+const workerError = (worker: string) => (error: unknown): void => {
+  metrics.incrementCounter("brash_worker_failures_total", "Fleet background worker failures.", { worker });
+  logger.error("worker.run.failed", { worker, error });
+};
+const outboxWorker = new OutboxRetryWorker(core, { onError: workerError("command_outbox") });
 outboxWorker.start();
-const recoveryWorker = new FleetRecoveryWorker(core);
+const recoveryWorker = new FleetRecoveryWorker(core, { onError: workerError("fleet_recovery") });
 recoveryWorker.start();
-const dispatchWorker = new MissionDispatchWorker(core);
+const dispatchWorker = new MissionDispatchWorker(core, { onError: workerError("mission_dispatch") });
 dispatchWorker.start();
-const workflowWorker = new WorkflowWorker(core);
+const workflowWorker = new WorkflowWorker(core, { onError: workerError("workflow") });
 workflowWorker.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
