@@ -24,13 +24,15 @@ export class SequentialIdGenerator implements IdGenerator {
   private workflow = 0;
   private workflowReservation = 0;
   private workOrder = 0;
+  private capabilityProfile = 0;
 
-  next(prefix: "mission" | "command" | "route" | "workflow" | "workflowReservation" | "workOrder"): string {
+  next(prefix: "mission" | "command" | "route" | "workflow" | "workflowReservation" | "workOrder" | "capabilityProfile"): string {
     if (prefix === "mission") return `MISSION-${String(++this.mission).padStart(4, "0")}`;
     if (prefix === "command") return `COMMAND-${String(++this.command).padStart(4, "0")}`;
     if (prefix === "route") return `ROUTE-${String(++this.route).padStart(4, "0")}`;
     if (prefix === "workflow") return `WORKFLOW-${String(++this.workflow).padStart(4, "0")}`;
     if (prefix === "workOrder") return `WORK-ORDER-${String(++this.workOrder).padStart(4, "0")}`;
+    if (prefix === "capabilityProfile") return `CAPABILITY-PROFILE-${String(++this.capabilityProfile).padStart(4, "0")}`;
     return `WORKFLOW-RESERVATION-${String(++this.workflowReservation).padStart(4, "0")}`;
   }
 }

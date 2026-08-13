@@ -51,6 +51,16 @@ export class WorkOrderAllocationPolicy {
     for (const capability of request.requiredCapabilities) {
       if (!robot.capabilities.actions.includes(capability)) reasons.push(`Missing capability: ${capability}.`);
     }
+    for (const attachment of request.robotConstraints?.requiredAttachments ?? []) {
+      if (!(robot.capabilities.attachments ?? []).includes(attachment)) reasons.push(`Missing attachment: ${attachment}.`);
+    }
+    if (request.robotConstraints?.requiredFloorType && !(robot.capabilities.supportedFloorTypes ?? []).includes(request.robotConstraints.requiredFloorType)) reasons.push(`Floor type ${request.robotConstraints.requiredFloorType} is unsupported.`);
+    if (request.robotConstraints?.maxRobotWidthMeters !== undefined) {
+      const width = robot.capabilities.dimensionsMeters?.width;
+      if (width === undefined) reasons.push("Robot width is not declared by an assigned capability profile.");
+      else if (width > request.robotConstraints.maxRobotWidthMeters) reasons.push(`Robot width ${width} m exceeds ${request.robotConstraints.maxRobotWidthMeters} m.`);
+    }
+    if (request.robotConstraints?.requiresCancellationSupport && robot.capabilities.supportsCancellation !== true) reasons.push("Adapter profile does not guarantee mission cancellation.");
     if (robot.state.batteryPercent < this.minimumBatteryPercent) reasons.push(`Battery ${robot.state.batteryPercent}% is below ${this.minimumBatteryPercent}%.`);
     for (const zoneId of [request.pickup.zoneId, request.dropoff.zoneId].filter((value): value is string => Boolean(value))) {
       if (robot.capabilities.allowedZones.length && !robot.capabilities.allowedZones.includes(zoneId)) reasons.push(`Robot is not permitted in zone ${zoneId}.`);

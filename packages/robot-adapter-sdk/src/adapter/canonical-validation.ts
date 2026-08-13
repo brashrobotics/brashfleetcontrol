@@ -21,6 +21,11 @@ export function assertRobotDescriptor(value: RobotDescriptor): void {
   if (value.capabilities.actions.length === 0) fail("DESCRIPTOR_ACTIONS_EMPTY", `${value.robotId} must declare at least one action capability.`);
   if (new Set(value.capabilities.actions).size !== value.capabilities.actions.length) fail("DESCRIPTOR_ACTIONS_DUPLICATE", `${value.robotId} has duplicate action capabilities.`);
   if (!Number.isFinite(value.capabilities.maxPayloadKg) || value.capabilities.maxPayloadKg < 0) fail("DESCRIPTOR_PAYLOAD_INVALID", `${value.robotId} maxPayloadKg must be non-negative.`);
+  if (value.capabilities.profileVersion !== undefined && (!Number.isInteger(value.capabilities.profileVersion) || value.capabilities.profileVersion < 1)) fail("DESCRIPTOR_PROFILE_VERSION_INVALID", `${value.robotId} profileVersion must be a positive integer.`);
+  if (value.capabilities.dimensionsMeters) {
+    const dimensions = value.capabilities.dimensionsMeters;
+    if (![dimensions.length, dimensions.width, dimensions.height].every((number) => Number.isFinite(number) && number > 0) || !Number.isFinite(dimensions.turningRadius) || dimensions.turningRadius < 0) fail("DESCRIPTOR_DIMENSIONS_INVALID", `${value.robotId} dimensions must be positive and turning radius non-negative.`);
+  }
 }
 
 export function assertRobotState(value: RobotStateSnapshot, expectedRobotId?: string): void {

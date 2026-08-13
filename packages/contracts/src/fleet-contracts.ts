@@ -20,6 +20,60 @@ export interface RobotCapabilities {
   actions: string[];
   maxPayloadKg: number;
   allowedZones: string[];
+  profileId?: string;
+  profileVersion?: number;
+  dimensionsMeters?: RobotDimensions;
+  supportedFloorTypes?: string[];
+  attachments?: string[];
+  supportsCancellation?: boolean;
+  adapterProtocolVersion?: string;
+}
+
+export interface RobotDimensions {
+  length: number;
+  width: number;
+  height: number;
+  turningRadius: number;
+}
+
+export interface RobotAssignmentConstraints {
+  requiredAttachments?: string[];
+  requiredFloorType?: string;
+  maxRobotWidthMeters?: number;
+  requiresCancellationSupport?: boolean;
+}
+
+export type CapabilityProfileStatus = "DRAFT" | "PUBLISHED" | "RETIRED";
+
+export interface CreateCapabilityProfileRequest {
+  vendor: string;
+  model: string;
+  version: number;
+  displayName: string;
+  actions: string[];
+  maxPayloadKg: number;
+  allowedZones: string[];
+  dimensionsMeters: RobotDimensions;
+  supportedFloorTypes: string[];
+  attachments: string[];
+  supportsCancellation: boolean;
+  adapterProtocolVersion: string;
+  operatorId: string;
+}
+
+export interface CapabilityProfileView extends CreateCapabilityProfileRequest {
+  profileId: string;
+  status: CapabilityProfileStatus;
+  createdAt: string;
+  publishedBy: string | null;
+  publishedAt: string | null;
+  retiredBy: string | null;
+  retiredAt: string | null;
+}
+
+export interface AssignCapabilityProfileRequest {
+  profileId: string;
+  operatorId: string;
 }
 
 export interface RobotDescriptor {
@@ -60,6 +114,7 @@ export interface CreateMissionRequest {
   payloadKg: number;
   pickup: MissionLocation;
   dropoff: MissionLocation;
+  robotConstraints?: RobotAssignmentConstraints;
   preferredRobotId?: string;
   autoDispatch?: boolean;
 }
@@ -86,6 +141,7 @@ export interface MissionView {
   payloadKg: number;
   pickup: MissionLocation;
   dropoff: MissionLocation;
+  robotConstraints?: RobotAssignmentConstraints;
   state: MissionState;
   assignedRobotId: string | null;
   commandId: string | null;
@@ -162,6 +218,7 @@ export interface CreateWorkOrderRequest {
   payloadKg: number;
   pickup: MissionLocation;
   dropoff: MissionLocation;
+  robotConstraints?: RobotAssignmentConstraints;
   followUpActions?: WorkOrderFollowUpAction[];
 }
 
@@ -201,6 +258,7 @@ export type FleetPermission =
   | "traffic:manage"
   | "map:manage"
   | "resource:manage"
+  | "capability:manage"
   | "observability:read"
   | "audit:read";
 

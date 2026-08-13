@@ -16,6 +16,11 @@ removed, and an empty mapping is rejected. The canonical starter vocabulary is
 exported as `CANONICAL_ROBOT_ACTIONS`; deployments may add namespaced actions
 without changing Fleet Core.
 
+Published Fleet capability profiles additionally declare dimensions, floor
+compatibility, tools/attachments, cancellation support, and adapter protocol
+version. Assign profiles only after adapter conformance and physical model
+review; Fleet Core rejects profile changes while a robot owns work.
+
 ## Boundaries
 
 Avoid unstructured free-text capabilities for constraints that affect assignment correctness.

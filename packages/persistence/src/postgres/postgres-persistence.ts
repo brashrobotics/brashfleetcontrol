@@ -6,6 +6,7 @@ import {
   PostgresAuditRepository,
   PostgresAlarmRepository,
   PostgresCommandRepository,
+  PostgresCapabilityProfileRepository,
   PostgresInfrastructureResourceRepository,
   PostgresMapTopologyRepository,
   PostgresMissionQueueRepository,
@@ -28,6 +29,7 @@ export class PostgresPersistence {
   readonly missionQueue: PostgresMissionQueueRepository;
   readonly robots: PostgresRobotRepository;
   readonly commands: PostgresCommandRepository;
+  readonly capabilityProfiles: PostgresCapabilityProfileRepository;
   readonly decisions: PostgresAssignmentDecisionRepository;
   readonly events: PostgresMissionEventRepository;
   readonly maps: PostgresMapTopologyRepository;
@@ -49,6 +51,7 @@ export class PostgresPersistence {
     this.missionQueue = new PostgresMissionQueueRepository(this.database);
     this.robots = new PostgresRobotRepository(this.database);
     this.commands = new PostgresCommandRepository(this.database);
+    this.capabilityProfiles = new PostgresCapabilityProfileRepository(this.database);
     this.decisions = new PostgresAssignmentDecisionRepository(this.database);
     this.events = new PostgresMissionEventRepository(this.database);
     this.maps = new PostgresMapTopologyRepository(this.database);

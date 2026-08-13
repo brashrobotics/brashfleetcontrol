@@ -24,6 +24,17 @@ export interface RobotRegistration {
   capabilities: string[];
   maxPayloadKg: number;
   allowedZones: string[];
+  capabilityMetadata?: RobotCapabilityMetadata;
+}
+
+export interface RobotCapabilityMetadata {
+  profileId?: string;
+  profileVersion?: number;
+  dimensionsMeters?: { length: number; width: number; height: number; turningRadius: number };
+  supportedFloorTypes?: string[];
+  attachments?: string[];
+  supportsCancellation?: boolean;
+  adapterProtocolVersion?: string;
 }
 
 export interface RobotTelemetry {
@@ -50,6 +61,7 @@ export class Robot {
   readonly capabilities: readonly string[];
   readonly maxPayloadKg: number;
   readonly allowedZones: readonly string[];
+  readonly capabilityMetadata: Readonly<RobotCapabilityMetadata>;
 
   private telemetry: RobotTelemetry;
   private currentLastSeenAt: Date;
@@ -68,6 +80,12 @@ export class Robot {
     this.capabilities = Object.freeze([...new Set(registration.capabilities)]);
     this.maxPayloadKg = registration.maxPayloadKg;
     this.allowedZones = Object.freeze([...new Set(registration.allowedZones)]);
+    this.capabilityMetadata = Object.freeze({
+      ...registration.capabilityMetadata,
+      dimensionsMeters: registration.capabilityMetadata?.dimensionsMeters ? { ...registration.capabilityMetadata.dimensionsMeters } : undefined,
+      supportedFloorTypes: registration.capabilityMetadata?.supportedFloorTypes ? [...new Set(registration.capabilityMetadata.supportedFloorTypes)] : undefined,
+      attachments: registration.capabilityMetadata?.attachments ? [...new Set(registration.capabilityMetadata.attachments)] : undefined,
+    });
     this.telemetry = { ...telemetry, pose: { ...telemetry.pose }, observedAt: new Date(telemetry.observedAt) };
     this.currentLastSeenAt = new Date(lastSeenAt);
     this.currentConnectionChangedAt = new Date(connectionChangedAt);
@@ -94,6 +112,7 @@ export class Robot {
       capabilities: [...snapshot.capabilities],
       maxPayloadKg: snapshot.maxPayloadKg,
       allowedZones: [...snapshot.allowedZones],
+      capabilityMetadata: structuredClone(snapshot.capabilityMetadata),
     }, {
       robotId: snapshot.robotId,
       sequence: snapshot.sequence,
@@ -227,6 +246,7 @@ export class Robot {
       capabilities: [...this.capabilities],
       maxPayloadKg: this.maxPayloadKg,
       allowedZones: [...this.allowedZones],
+      capabilityMetadata: structuredClone(this.capabilityMetadata),
       sequence: this.telemetry.sequence,
       observedAt: new Date(this.telemetry.observedAt),
       connection: this.telemetry.connection,

@@ -20,7 +20,7 @@ const ROLE_PERMISSIONS: Record<FleetRole, readonly FleetPermission[]> = {
   VIEWER: ["fleet:read"],
   OPERATOR: ["fleet:read", "mission:create", "mission:cancel", "workflow:create", "workflow:cancel", "orchestrator:submit", "orchestrator:cancel", "alarm:acknowledge", "traffic:manage", "resource:manage"],
   DISPATCHER: ["fleet:read", "mission:create", "mission:dispatch", "mission:cancel", "workflow:create", "workflow:cancel", "orchestrator:submit", "orchestrator:cancel"],
-  FLEET_ADMIN: ["fleet:read", "mission:create", "mission:dispatch", "mission:cancel", "workflow:create", "workflow:cancel", "orchestrator:submit", "orchestrator:cancel", "alarm:acknowledge", "traffic:manage", "map:manage", "resource:manage", "observability:read", "audit:read"],
+  FLEET_ADMIN: ["fleet:read", "mission:create", "mission:dispatch", "mission:cancel", "workflow:create", "workflow:cancel", "orchestrator:submit", "orchestrator:cancel", "alarm:acknowledge", "traffic:manage", "map:manage", "resource:manage", "capability:manage", "observability:read", "audit:read"],
   INTEGRATION: ["fleet:read", "mission:create", "workflow:create", "orchestrator:submit", "observability:read"],
 };
 

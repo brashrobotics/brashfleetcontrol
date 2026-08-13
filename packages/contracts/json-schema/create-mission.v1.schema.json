@@ -25,10 +25,21 @@
     "payloadKg": { "type": "number", "minimum": 0 },
     "pickup": { "$ref": "#/$defs/location" },
     "dropoff": { "$ref": "#/$defs/location" },
+    "robotConstraints": { "$ref": "#/$defs/robotConstraints" },
     "preferredRobotId": { "type": "string", "minLength": 1 },
     "autoDispatch": { "type": "boolean" }
   },
   "$defs": {
+    "robotConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredAttachments": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "requiredFloorType": { "type": "string", "minLength": 1 },
+        "maxRobotWidthMeters": { "type": "number", "exclusiveMinimum": 0 },
+        "requiresCancellationSupport": { "type": "boolean" }
+      }
+    },
     "location": {
       "type": "object",
       "additionalProperties": false,

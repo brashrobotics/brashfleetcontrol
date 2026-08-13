@@ -8,9 +8,10 @@ Groups product capabilities by business area while the system remains a modular 
 
 ## Responsibilities
 
-Provide clear module entry points and isolate robots, missions, workflows, work-order orchestration, dispatch, traffic, maps, charging, alarms, identity, audit, and integrations.
+Provide clear module entry points and isolate robots, capability profiles, missions, workflows, work-order orchestration, dispatch, traffic, maps, charging, alarms, identity, audit, and integrations.
 
 The current [orchestrator module](./orchestrator/README.md) accepts factory intent, evaluates heterogeneous robots, and compiles the selected execution into durable workflows.
+The [capability registry](./capabilities/README.md) versions approved physical and protocol constraints per vendor/model.
 
 ## Boundaries
 

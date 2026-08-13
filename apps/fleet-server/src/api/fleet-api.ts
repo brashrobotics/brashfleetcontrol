@@ -1,6 +1,8 @@
 import {
   ContractValidationError,
   parseAlarmActionRequest,
+  parseAssignCapabilityProfileRequest,
+  parseCreateCapabilityProfileRequest,
   parseCreateInfrastructureResourceRequest,
   parseCreateMapVersionRequest,
   parseCreateMissionRequest,
@@ -57,6 +59,30 @@ export class FleetApi {
 
       if (request.method === "GET" && url.pathname === "/api/v1/work-orders") {
         return json({ workOrders: await this.core.listWorkOrders() });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/capability-profiles") {
+        return json({ profiles: await this.core.listCapabilityProfiles() });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/v1/capability-profiles") {
+        return json({ profile: await this.core.createCapabilityProfile(parseCreateCapabilityProfileRequest(await request.json())) }, 201);
+      }
+
+      const capabilityLifecycleMatch = url.pathname.match(/^\/api\/v1\/capability-profiles\/([^/]+)\/(publish|retire)$/);
+      if (request.method === "POST" && capabilityLifecycleMatch) {
+        const input = parseAlarmActionRequest(await request.json());
+        const profileId = decodeURIComponent(capabilityLifecycleMatch[1]);
+        const profile = capabilityLifecycleMatch[2] === "publish"
+          ? await this.core.publishCapabilityProfile(profileId, input.operatorId)
+          : await this.core.retireCapabilityProfile(profileId, input.operatorId);
+        return json({ profile });
+      }
+
+      const capabilityAssignmentMatch = url.pathname.match(/^\/api\/v1\/robots\/([^/]+)\/capability-profile$/);
+      if (request.method === "POST" && capabilityAssignmentMatch) {
+        const input = parseAssignCapabilityProfileRequest(await request.json());
+        return json({ robot: await this.core.assignRobotCapabilityProfile(decodeURIComponent(capabilityAssignmentMatch[1]), input.profileId, input.operatorId) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/v1/work-orders") {

@@ -18,6 +18,8 @@ export interface RobotFixtureOptions {
   mapId?: string;
   availability?: RobotStateSnapshot["availability"];
   connection?: RobotStateSnapshot["connection"];
+  vendor?: string;
+  model?: string;
 }
 
 export function robotFixture(options: RobotFixtureOptions): SimulatorRobotDefinition {
@@ -25,8 +27,8 @@ export function robotFixture(options: RobotFixtureOptions): SimulatorRobotDefini
   const descriptor: RobotDescriptor = {
     robotId: options.robotId,
     displayName: options.displayName ?? options.robotId,
-    vendor: "BRASH",
-    model: "SIM-AMR",
+    vendor: options.vendor ?? "BRASH",
+    model: options.model ?? "SIM-AMR",
     capabilities: {
       actions: options.capabilities ?? ["pallet_transport"],
       maxPayloadKg: options.maxPayloadKg ?? 500,

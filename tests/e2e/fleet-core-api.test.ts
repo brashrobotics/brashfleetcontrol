@@ -466,3 +466,23 @@ test("API submits, explains, lists, and cancels orchestrated work orders", async
     await core.stop();
   }
 });
+
+test("API manages the versioned capability registry and robot assignment", async () => {
+  const { core } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+  try {
+    const request = { vendor: "BRASH", model: "SIM-AMR", version: 1, displayName: "API capability profile",
+      actions: ["pallet_transport"], maxPayloadKg: 750, allowedZones: ["warehouse", "production"],
+      dimensionsMeters: { length: 1.4, width: 0.8, height: 1.2, turningRadius: 0.75 }, supportedFloorTypes: ["epoxy"],
+      attachments: ["fork"], supportsCancellation: true, adapterProtocolVersion: "1.0", operatorId: "spoofed" };
+    const createdResponse = await api.fetch(new Request("http://fleet.test/api/v1/capability-profiles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) }));
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as { profile: { profileId: string } };
+    assert.equal((await api.fetch(new Request("http://fleet.test/api/v1/capability-profiles"))).status, 200);
+    assert.equal((await api.fetch(new Request(`http://fleet.test/api/v1/capability-profiles/${created.profile.profileId}/publish`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operatorId: "approver" }) }))).status, 200);
+    const assigned = await api.fetch(new Request("http://fleet.test/api/v1/robots/BR-01/capability-profile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profileId: created.profile.profileId, operatorId: "approver" }) }));
+    assert.equal(assigned.status, 200);
+    assert.equal(((await assigned.json()) as { robot: { capabilities: { profileId: string } } }).robot.capabilities.profileId, created.profile.profileId);
+  } finally { await core.stop(); }
+});

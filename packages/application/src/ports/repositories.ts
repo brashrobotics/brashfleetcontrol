@@ -1,5 +1,7 @@
 import type {
   AuditOutcome,
+  CapabilityProfileStatus,
+  CreateCapabilityProfileRequest,
   FleetRole,
   AlarmSeverity,
   AlarmSourceType,
@@ -226,6 +228,24 @@ export interface RobotRepository {
   getById(robotId: string, options?: RepositoryReadOptions): Promise<Robot | null>;
   list(options?: RepositoryReadOptions): Promise<Robot[]>;
   save(robot: Robot): Promise<void>;
+}
+
+export interface CapabilityProfileRecord extends CreateCapabilityProfileRequest {
+  profileId: string;
+  status: CapabilityProfileStatus;
+  createdAt: Date;
+  publishedBy: string | null;
+  publishedAt: Date | null;
+  retiredBy: string | null;
+  retiredAt: Date | null;
+}
+
+export interface CapabilityProfileRepository {
+  create(profile: CapabilityProfileRecord): Promise<void>;
+  getById(profileId: string): Promise<CapabilityProfileRecord | null>;
+  list(): Promise<CapabilityProfileRecord[]>;
+  publish(profileId: string, operatorId: string, at: Date): Promise<CapabilityProfileRecord | null>;
+  retire(profileId: string, operatorId: string, at: Date): Promise<CapabilityProfileRecord | null>;
 }
 
 export interface PendingCommand {

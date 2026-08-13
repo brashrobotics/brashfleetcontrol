@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.13.0
+  version: 0.14.0
   description: Authenticated, role-authorized vendor-independent missions, workflows, infrastructure, traffic, alarms, and append-only audit API.
 servers:
   - url: http://127.0.0.1:4273
@@ -535,6 +535,59 @@ paths:
                   workOrder: { $ref: "#/components/schemas/WorkOrder" }
         "400":
           $ref: "#/components/responses/BadRequest"
+  /api/v1/capability-profiles:
+    get:
+      operationId: listCapabilityProfiles
+      responses:
+        "200":
+          description: Versioned robot capability profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profiles]
+                properties:
+                  profiles: { type: array, items: { $ref: "#/components/schemas/CapabilityProfile" } }
+    post:
+      operationId: createCapabilityProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCapabilityProfileRequest" }
+      responses:
+        "201":
+          description: Draft capability profile created
+          content:
+            application/json:
+              schema: { type: object, required: [profile], properties: { profile: { $ref: "#/components/schemas/CapabilityProfile" } } }
+  /api/v1/capability-profiles/{profileId}/{action}:
+    parameters:
+      - { name: profileId, in: path, required: true, schema: { type: string } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [publish, retire] } }
+    post:
+      operationId: transitionCapabilityProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlarmActionRequest" }
+      responses:
+        "200":
+          description: Capability profile transitioned
+  /api/v1/robots/{robotId}/capability-profile:
+    parameters:
+      - { name: robotId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: assignRobotCapabilityProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignCapabilityProfileRequest" }
+      responses:
+        "200":
+          description: Published profile assigned to an available robot
   /api/v1/work-orders/{workOrderId}:
     parameters:
       - $ref: "#/components/parameters/WorkOrderId"
@@ -745,7 +798,7 @@ components:
         role: { type: string, enum: [VIEWER, OPERATOR, DISPATCHER, FLEET_ADMIN, INTEGRATION] }
         permissions:
           type: array
-          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, orchestrator:submit, orchestrator:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, observability:read, audit:read] }
+          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, orchestrator:submit, orchestrator:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, capability:manage, observability:read, audit:read] }
         siteIds:
           type: array
           items: { type: string }
@@ -839,6 +892,61 @@ components:
         x: { type: number }
         y: { type: number }
         zoneId: { type: string, minLength: 1 }
+    RobotAssignmentConstraints:
+      type: object
+      additionalProperties: false
+      properties:
+        requiredAttachments: { type: array, uniqueItems: true, items: { type: string, minLength: 1 } }
+        requiredFloorType: { type: string, minLength: 1 }
+        maxRobotWidthMeters: { type: number, exclusiveMinimum: 0 }
+        requiresCancellationSupport: { type: boolean }
+    RobotDimensions:
+      type: object
+      additionalProperties: false
+      required: [length, width, height, turningRadius]
+      properties:
+        length: { type: number, exclusiveMinimum: 0 }
+        width: { type: number, exclusiveMinimum: 0 }
+        height: { type: number, exclusiveMinimum: 0 }
+        turningRadius: { type: number, minimum: 0 }
+    CreateCapabilityProfileRequest:
+      type: object
+      additionalProperties: false
+      required: [vendor, model, version, displayName, actions, maxPayloadKg, allowedZones, dimensionsMeters, supportedFloorTypes, attachments, supportsCancellation, adapterProtocolVersion, operatorId]
+      properties:
+        vendor: { type: string, minLength: 1 }
+        model: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
+        displayName: { type: string, minLength: 1 }
+        actions: { type: array, minItems: 1, uniqueItems: true, items: { type: string } }
+        maxPayloadKg: { type: number, minimum: 0 }
+        allowedZones: { type: array, uniqueItems: true, items: { type: string } }
+        dimensionsMeters: { $ref: "#/components/schemas/RobotDimensions" }
+        supportedFloorTypes: { type: array, minItems: 1, uniqueItems: true, items: { type: string } }
+        attachments: { type: array, uniqueItems: true, items: { type: string } }
+        supportsCancellation: { type: boolean }
+        adapterProtocolVersion: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+    CapabilityProfile:
+      allOf:
+        - $ref: "#/components/schemas/CreateCapabilityProfileRequest"
+        - type: object
+          required: [profileId, status, createdAt, publishedBy, publishedAt, retiredBy, retiredAt]
+          properties:
+            profileId: { type: string }
+            status: { type: string, enum: [DRAFT, PUBLISHED, RETIRED] }
+            createdAt: { type: string, format: date-time }
+            publishedBy: { type: [string, "null"] }
+            publishedAt: { type: [string, "null"], format: date-time }
+            retiredBy: { type: [string, "null"] }
+            retiredAt: { type: [string, "null"], format: date-time }
+    AssignCapabilityProfileRequest:
+      type: object
+      additionalProperties: false
+      required: [profileId, operatorId]
+      properties:
+        profileId: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
     CreateMissionRequest:
       type: object
       additionalProperties: false
@@ -855,6 +963,7 @@ components:
         payloadKg: { type: number, minimum: 0 }
         pickup: { $ref: "#/components/schemas/Location" }
         dropoff: { $ref: "#/components/schemas/Location" }
+        robotConstraints: { $ref: "#/components/schemas/RobotAssignmentConstraints" }
         preferredRobotId: { type: string, minLength: 1 }
         autoDispatch: { type: boolean, default: true }
     WorkOrderFollowUpAction:
@@ -890,6 +999,7 @@ components:
         payloadKg: { type: number, minimum: 0 }
         pickup: { $ref: "#/components/schemas/Location" }
         dropoff: { $ref: "#/components/schemas/Location" }
+        robotConstraints: { $ref: "#/components/schemas/RobotAssignmentConstraints" }
         followUpActions:
           type: array
           maxItems: 20
@@ -919,6 +1029,7 @@ components:
         payloadKg: { type: number, minimum: 0 }
         pickup: { $ref: "#/components/schemas/Location" }
         dropoff: { $ref: "#/components/schemas/Location" }
+        robotConstraints: { $ref: "#/components/schemas/RobotAssignmentConstraints" }
         followUpActions:
           type: array
           items: { $ref: "#/components/schemas/WorkOrderFollowUpAction" }
@@ -1024,6 +1135,7 @@ components:
         payloadKg: { type: number }
         pickup: { $ref: "#/components/schemas/Location" }
         dropoff: { $ref: "#/components/schemas/Location" }
+        robotConstraints: { $ref: "#/components/schemas/RobotAssignmentConstraints" }
         state:
           type: string
           enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, RECOVERY_REQUIRED, CANCELLING, CANCELLED, COMPLETED, FAILED]
@@ -1369,6 +1481,13 @@ components:
             allowedZones:
               type: array
               items: { type: string }
+            profileId: { type: string }
+            profileVersion: { type: integer, minimum: 1 }
+            dimensionsMeters: { $ref: "#/components/schemas/RobotDimensions" }
+            supportedFloorTypes: { type: array, items: { type: string } }
+            attachments: { type: array, items: { type: string } }
+            supportsCancellation: { type: boolean }
+            adapterProtocolVersion: { type: string }
         state: { $ref: "#/components/schemas/RobotState" }
     FleetSnapshot:
       type: object

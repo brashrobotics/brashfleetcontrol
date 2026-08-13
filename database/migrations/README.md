@@ -90,6 +90,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - Priority/retry/lease fields for multi-instance orchestrator workers.
 - Work-order correlation to compiled workflows and preferred mission robots.
 
+`013_capability_registry.sql` adds:
+
+- Versioned draft/published/retired capability profiles per vendor robot model.
+- Physical dimensions, floor compatibility, attachments, cancellation support, and adapter protocol metadata.
+- Persisted capability metadata on robot registrations and one active published profile per model.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

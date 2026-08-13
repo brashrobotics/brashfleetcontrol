@@ -26,6 +26,7 @@ export function missionToView(mission: Mission): MissionView {
     payloadKg: snapshot.payloadKg,
     pickup: { ...snapshot.pickup },
     dropoff: { ...snapshot.dropoff },
+    robotConstraints: snapshot.robotConstraints ? structuredClone(snapshot.robotConstraints) : undefined,
     state: snapshot.state,
     assignedRobotId: snapshot.assignedRobotId,
     commandId: snapshot.commandId,
@@ -48,6 +49,7 @@ export function robotToView(robot: Robot): RobotView {
       actions: [...snapshot.capabilities],
       maxPayloadKg: snapshot.maxPayloadKg,
       allowedZones: [...snapshot.allowedZones],
+      ...structuredClone(snapshot.capabilityMetadata),
     },
     state: {
       schemaVersion: FLEET_SCHEMA_VERSION,

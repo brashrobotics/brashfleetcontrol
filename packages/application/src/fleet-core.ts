@@ -4,6 +4,8 @@ import {
   type AlarmView,
   type AssignmentDecision,
   type CommandReceipt,
+  type CapabilityProfileView,
+  type CreateCapabilityProfileRequest,
   type CreateInfrastructureResourceRequest,
   type CreateMapVersionRequest,
   type CreateMissionRequest,
@@ -54,6 +56,8 @@ import type {
   AssignmentDecisionRepository,
   AlarmRecord,
   AlarmRepository,
+  CapabilityProfileRecord,
+  CapabilityProfileRepository,
   CommandRepository,
   InfrastructureResourceRecord,
   InfrastructureResourceRepository,
@@ -94,6 +98,7 @@ export interface FleetCoreDependencies {
   workflows: WorkflowRepository;
   workflowResourceReservations: WorkflowResourceReservationRepository;
   workOrders: WorkOrderRepository;
+  capabilityProfiles: CapabilityProfileRepository;
   transactions: TransactionManager;
   clock: Clock;
   ids: IdGenerator;
@@ -181,7 +186,7 @@ export class FleetCore {
       for (const descriptor of descriptors) {
         this.managedRobotIds.add(descriptor.robotId);
         const state = await this.dependencies.adapter.getState(descriptor.robotId);
-        const registration: RobotRegistration = {
+          const registration: RobotRegistration = {
           robotId: descriptor.robotId,
           displayName: descriptor.displayName,
           vendor: descriptor.vendor,
@@ -189,6 +194,7 @@ export class FleetCore {
           capabilities: [...descriptor.capabilities.actions],
           maxPayloadKg: descriptor.capabilities.maxPayloadKg,
           allowedZones: [...descriptor.capabilities.allowedZones],
+          capabilityMetadata: capabilityMetadataFromDescriptor(descriptor.capabilities),
         };
         await this.dependencies.transactions.runExclusive(async () => {
           const existing = await this.dependencies.robots.getById(
@@ -196,6 +202,12 @@ export class FleetCore {
             { forUpdate: true },
           );
           const existingSnapshot = existing?.snapshot();
+          if (existingSnapshot?.capabilityMetadata?.profileId) {
+            registration.capabilities = [...existingSnapshot.capabilities];
+            registration.maxPayloadKg = existingSnapshot.maxPayloadKg;
+            registration.allowedZones = [...existingSnapshot.allowedZones];
+            registration.capabilityMetadata = structuredClone(existingSnapshot.capabilityMetadata);
+          }
           const adapterHasStaleAvailability = Boolean(
             existingSnapshot?.activeMissionId
             && (existingSnapshot.availability === "RESERVED" || existingSnapshot.availability === "EXECUTING")
@@ -265,6 +277,7 @@ export class FleetCore {
         payloadKg: request.payloadKg,
         pickup: { ...request.pickup },
         dropoff: { ...request.dropoff },
+        robotConstraints: request.robotConstraints ? structuredClone(request.robotConstraints) : undefined,
         createdAt: now,
       });
       mission.queue(now);
@@ -272,6 +285,55 @@ export class FleetCore {
       await this.dependencies.missionQueue.enqueue(mission.missionId, mission.priority, now);
       await this.appendMissionEvent(mission, "MISSION_QUEUED", "Mission accepted and queued.", now);
       return missionToView(mission);
+    });
+  }
+
+  async createCapabilityProfile(request: CreateCapabilityProfileRequest): Promise<CapabilityProfileView> {
+    const now = this.dependencies.clock.now();
+    const record: CapabilityProfileRecord = { ...structuredClone(request), profileId: this.dependencies.ids.next("capabilityProfile"), status: "DRAFT", createdAt: now, publishedBy: null, publishedAt: null, retiredBy: null, retiredAt: null };
+    try {
+      await this.dependencies.capabilityProfiles.create(record);
+    } catch (error) {
+      if (isUniqueConstraintViolation(error) || (error instanceof Error && error.message.includes("already exists"))) throw new DomainError("CAPABILITY_PROFILE_EXISTS", `${request.vendor}/${request.model}@${request.version} already exists.`);
+      throw error;
+    }
+    return this.capabilityProfileToView(record);
+  }
+
+  async listCapabilityProfiles(): Promise<CapabilityProfileView[]> {
+    return (await this.dependencies.capabilityProfiles.list()).map((record) => this.capabilityProfileToView(record));
+  }
+
+  async publishCapabilityProfile(profileId: string, operatorId: string): Promise<CapabilityProfileView> {
+    try {
+      const profile = await this.dependencies.capabilityProfiles.publish(profileId, operatorId, this.dependencies.clock.now());
+      if (!profile) throw new DomainError("CAPABILITY_PROFILE_NOT_PUBLISHABLE", `Capability profile ${profileId} was not found, is not a draft, or its model already has a published profile.`);
+      return this.capabilityProfileToView(profile);
+    } catch (error) {
+      if (isUniqueConstraintViolation(error)) throw new DomainError("CAPABILITY_PROFILE_MODEL_PUBLISHED", "This vendor/model already has a published profile; retire it before publishing another version.");
+      throw error;
+    }
+  }
+
+  async retireCapabilityProfile(profileId: string, operatorId: string): Promise<CapabilityProfileView> {
+    const assigned = (await this.dependencies.robots.list()).filter((robot) => robot.capabilityMetadata.profileId === profileId);
+    if (assigned.length) throw new DomainError("CAPABILITY_PROFILE_IN_USE", `Capability profile ${profileId} is assigned to ${assigned.map((robot) => robot.robotId).join(", ")}.`);
+    const profile = await this.dependencies.capabilityProfiles.retire(profileId, operatorId, this.dependencies.clock.now());
+    if (!profile) throw new DomainError("CAPABILITY_PROFILE_NOT_FOUND", `Capability profile ${profileId} was not found or already retired.`);
+    return this.capabilityProfileToView(profile);
+  }
+
+  async assignRobotCapabilityProfile(robotId: string, profileId: string, _operatorId: string): Promise<import("@brash/contracts").RobotView> {
+    return this.dependencies.transactions.runExclusive(async () => {
+      const robot = await this.requireRobot(robotId, true);
+      if (robot.availability !== "AVAILABLE") throw new DomainError("ROBOT_PROFILE_CHANGE_UNSAFE", `Robot ${robotId} must be AVAILABLE before changing its capability profile.`);
+      const profile = await this.dependencies.capabilityProfiles.getById(profileId);
+      if (!profile || profile.status !== "PUBLISHED") throw new DomainError("CAPABILITY_PROFILE_NOT_PUBLISHED", `Capability profile ${profileId} is not published.`);
+      if (profile.vendor !== robot.vendor || profile.model !== robot.model) throw new DomainError("CAPABILITY_PROFILE_MODEL_MISMATCH", `Profile ${profileId} targets ${profile.vendor}/${profile.model}, not ${robot.vendor}/${robot.model}.`);
+      const snapshot = robot.snapshot();
+      const reprofiled = Robot.restore({ ...snapshot, capabilities: [...profile.actions], maxPayloadKg: profile.maxPayloadKg, allowedZones: [...profile.allowedZones], capabilityMetadata: capabilityMetadataFromProfile(profile) });
+      await this.dependencies.robots.save(reprofiled);
+      return robotToView(reprofiled);
     });
   }
 
@@ -1737,6 +1799,7 @@ export class FleetCore {
         payloadKg: request.payloadKg,
         pickup: { ...request.pickup },
         dropoff: { ...request.dropoff },
+        robotConstraints: request.robotConstraints ? structuredClone(request.robotConstraints) : undefined,
         autoDispatch: false,
       },
     }];
@@ -1788,6 +1851,7 @@ export class FleetCore {
             payloadKg: request.payloadKg,
             pickup: { ...currentLocation },
             dropoff: resourceLocation,
+            robotConstraints: request.robotConstraints ? structuredClone(request.robotConstraints) : undefined,
             autoDispatch: false,
           },
         });
@@ -1827,6 +1891,10 @@ export class FleetCore {
       updatedAt: record.updatedAt.toISOString(),
       completedAt: record.completedAt?.toISOString() ?? null,
     };
+  }
+
+  private capabilityProfileToView(record: CapabilityProfileRecord): CapabilityProfileView {
+    return { ...structuredClone(record), createdAt: record.createdAt.toISOString(), publishedAt: record.publishedAt?.toISOString() ?? null, retiredAt: record.retiredAt?.toISOString() ?? null };
   }
 
   private async getTrafficControls(mapId: string): Promise<{
@@ -2245,6 +2313,21 @@ export class FleetCore {
 
 function isUniqueConstraintViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
+}
+
+function capabilityMetadataFromDescriptor(capabilities: import("@brash/contracts").RobotCapabilities): import("@brash/domain").RobotCapabilityMetadata {
+  return { profileId: capabilities.profileId, profileVersion: capabilities.profileVersion,
+    dimensionsMeters: capabilities.dimensionsMeters ? { ...capabilities.dimensionsMeters } : undefined,
+    supportedFloorTypes: capabilities.supportedFloorTypes ? [...capabilities.supportedFloorTypes] : undefined,
+    attachments: capabilities.attachments ? [...capabilities.attachments] : undefined,
+    supportsCancellation: capabilities.supportsCancellation,
+    adapterProtocolVersion: capabilities.adapterProtocolVersion };
+}
+
+function capabilityMetadataFromProfile(profile: CapabilityProfileRecord): import("@brash/domain").RobotCapabilityMetadata {
+  return { profileId: profile.profileId, profileVersion: profile.version, dimensionsMeters: { ...profile.dimensionsMeters },
+    supportedFloorTypes: [...profile.supportedFloorTypes], attachments: [...profile.attachments],
+    supportsCancellation: profile.supportsCancellation, adapterProtocolVersion: profile.adapterProtocolVersion };
 }
 
 function percent(numerator: number, denominator: number): number {

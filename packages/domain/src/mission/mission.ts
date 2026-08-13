@@ -29,6 +29,12 @@ export interface CreateMissionProps {
   payloadKg: number;
   pickup: MissionLocation;
   dropoff: MissionLocation;
+  robotConstraints?: {
+    requiredAttachments?: string[];
+    requiredFloorType?: string;
+    maxRobotWidthMeters?: number;
+    requiresCancellationSupport?: boolean;
+  };
   createdAt: Date;
 }
 
@@ -57,6 +63,7 @@ export class Mission {
   readonly payloadKg: number;
   readonly pickup: MissionLocation;
   readonly dropoff: MissionLocation;
+  readonly robotConstraints?: Readonly<NonNullable<CreateMissionProps["robotConstraints"]>>;
   readonly createdAt: Date;
 
   private currentState: MissionState = "CREATED";
@@ -76,6 +83,7 @@ export class Mission {
     this.payloadKg = props.payloadKg;
     this.pickup = Object.freeze({ ...props.pickup });
     this.dropoff = Object.freeze({ ...props.dropoff });
+    this.robotConstraints = props.robotConstraints ? Object.freeze(structuredClone(props.robotConstraints)) : undefined;
     this.createdAt = new Date(props.createdAt);
     this.currentUpdatedAt = new Date(props.createdAt);
   }
@@ -105,6 +113,7 @@ export class Mission {
       payloadKg: snapshot.payloadKg,
       pickup: { ...snapshot.pickup },
       dropoff: { ...snapshot.dropoff },
+      robotConstraints: snapshot.robotConstraints ? structuredClone(snapshot.robotConstraints) : undefined,
       createdAt: snapshot.createdAt,
     });
     mission.currentState = snapshot.state;
@@ -260,6 +269,7 @@ export class Mission {
       payloadKg: this.payloadKg,
       pickup: { ...this.pickup },
       dropoff: { ...this.dropoff },
+      robotConstraints: this.robotConstraints ? structuredClone(this.robotConstraints) : undefined,
       state: this.currentState,
       assignedRobotId: this.currentAssignedRobotId,
       commandId: this.currentCommandId,

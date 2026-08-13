@@ -1,5 +1,7 @@
 import type {
   AlarmActionRequest,
+  AssignCapabilityProfileRequest,
+  CreateCapabilityProfileRequest,
   CreateInfrastructureResourceRequest,
   CreateMapVersionRequest,
   CreateMissionRequest,
@@ -13,6 +15,7 @@ import type {
   MapNodeView,
   MissionLocation,
   UpdateInfrastructureResourceStatusRequest,
+  RobotAssignmentConstraints,
   WorkflowStepDefinition,
   WorkOrderFollowUpAction,
 } from "./fleet-contracts.js";
@@ -47,6 +50,16 @@ function finiteNumber(value: unknown, path: string, issues: string[]): number {
   return value;
 }
 
+function stringArray(value: unknown, path: string, issues: string[], requireOne = false): string[] {
+  if (!Array.isArray(value)) {
+    issues.push(`${path} must be an array.`);
+    return [];
+  }
+  const result = [...new Set(value.map((item, index) => nonEmptyString(item, `${path}[${index}]`, issues)).filter(Boolean))];
+  if (requireOne && result.length === 0) issues.push(`${path} must contain at least one value.`);
+  return result;
+}
+
 function parseLocation(value: unknown, path: string, issues: string[]): MissionLocation {
   if (!isRecord(value)) {
     issues.push(`${path} must be an object.`);
@@ -63,6 +76,26 @@ function parseLocation(value: unknown, path: string, issues: string[]): MissionL
     x: finiteNumber(value.x, `${path}.x`, issues),
     y: finiteNumber(value.y, `${path}.y`, issues),
     ...(zoneId ? { zoneId } : {}),
+  };
+}
+
+function parseRobotConstraints(value: unknown, path: string, issues: string[]): RobotAssignmentConstraints | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    issues.push(`${path} must be an object.`);
+    return undefined;
+  }
+  const requiredAttachments = value.requiredAttachments === undefined ? undefined : stringArray(value.requiredAttachments, `${path}.requiredAttachments`, issues);
+  const requiredFloorType = value.requiredFloorType === undefined ? undefined : nonEmptyString(value.requiredFloorType, `${path}.requiredFloorType`, issues);
+  const maxRobotWidthMeters = value.maxRobotWidthMeters === undefined ? undefined : finiteNumber(value.maxRobotWidthMeters, `${path}.maxRobotWidthMeters`, issues);
+  if (maxRobotWidthMeters !== undefined && maxRobotWidthMeters <= 0) issues.push(`${path}.maxRobotWidthMeters must be greater than 0.`);
+  const requiresCancellationSupport = value.requiresCancellationSupport;
+  if (requiresCancellationSupport !== undefined && typeof requiresCancellationSupport !== "boolean") issues.push(`${path}.requiresCancellationSupport must be a boolean.`);
+  return {
+    ...(requiredAttachments ? { requiredAttachments } : {}),
+    ...(requiredFloorType ? { requiredFloorType } : {}),
+    ...(maxRobotWidthMeters !== undefined ? { maxRobotWidthMeters } : {}),
+    ...(typeof requiresCancellationSupport === "boolean" ? { requiresCancellationSupport } : {}),
   };
 }
 
@@ -100,6 +133,7 @@ export function parseCreateMissionRequest(value: unknown): CreateMissionRequest 
   const preferredRobotId = value.preferredRobotId === undefined
     ? undefined
     : nonEmptyString(value.preferredRobotId, "preferredRobotId", issues);
+  const robotConstraints = parseRobotConstraints(value.robotConstraints, "robotConstraints", issues);
 
   if (value.autoDispatch !== undefined && typeof value.autoDispatch !== "boolean") {
     issues.push("autoDispatch must be a boolean when provided.");
@@ -116,6 +150,7 @@ export function parseCreateMissionRequest(value: unknown): CreateMissionRequest 
     dropoff,
     ...(externalReference ? { externalReference } : {}),
     ...(preferredRobotId ? { preferredRobotId } : {}),
+    ...(robotConstraints ? { robotConstraints } : {}),
     ...(typeof value.autoDispatch === "boolean" ? { autoDispatch: value.autoDispatch } : {}),
   };
 }
@@ -159,8 +194,45 @@ export function parseCreateWorkOrderRequest(value: unknown): CreateWorkOrderRequ
     pickup: transport.pickup,
     dropoff: transport.dropoff,
     ...(transport.externalReference ? { externalReference: transport.externalReference } : {}),
+    ...(transport.robotConstraints ? { robotConstraints: transport.robotConstraints } : {}),
     ...(followUpActions.length ? { followUpActions } : {}),
   };
+}
+
+export function parseCreateCapabilityProfileRequest(value: unknown): CreateCapabilityProfileRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const vendor = nonEmptyString(value.vendor, "vendor", issues);
+  const model = nonEmptyString(value.model, "model", issues);
+  const version = finiteNumber(value.version, "version", issues);
+  if (!Number.isInteger(version) || version < 1) issues.push("version must be a positive integer.");
+  const displayName = nonEmptyString(value.displayName, "displayName", issues);
+  const actions = stringArray(value.actions, "actions", issues, true);
+  const maxPayloadKg = finiteNumber(value.maxPayloadKg, "maxPayloadKg", issues);
+  if (maxPayloadKg < 0) issues.push("maxPayloadKg must be non-negative.");
+  const allowedZones = stringArray(value.allowedZones, "allowedZones", issues);
+  const supportedFloorTypes = stringArray(value.supportedFloorTypes, "supportedFloorTypes", issues, true);
+  const attachments = stringArray(value.attachments, "attachments", issues);
+  const dimensions = isRecord(value.dimensionsMeters) ? value.dimensionsMeters : (issues.push("dimensionsMeters must be an object."), {});
+  const length = finiteNumber(dimensions.length, "dimensionsMeters.length", issues);
+  const width = finiteNumber(dimensions.width, "dimensionsMeters.width", issues);
+  const height = finiteNumber(dimensions.height, "dimensionsMeters.height", issues);
+  const turningRadius = finiteNumber(dimensions.turningRadius, "dimensionsMeters.turningRadius", issues);
+  if ([length, width, height].some((number) => number <= 0) || turningRadius < 0) issues.push("Robot dimensions must be positive and turningRadius must be non-negative.");
+  if (typeof value.supportsCancellation !== "boolean") issues.push("supportsCancellation must be a boolean.");
+  const adapterProtocolVersion = nonEmptyString(value.adapterProtocolVersion, "adapterProtocolVersion", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length) throw new ContractValidationError(issues);
+  return { vendor, model, version, displayName, actions, maxPayloadKg, allowedZones, dimensionsMeters: { length, width, height, turningRadius }, supportedFloorTypes, attachments, supportsCancellation: value.supportsCancellation as boolean, adapterProtocolVersion, operatorId };
+}
+
+export function parseAssignCapabilityProfileRequest(value: unknown): AssignCapabilityProfileRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const profileId = nonEmptyString(value.profileId, "profileId", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length) throw new ContractValidationError(issues);
+  return { profileId, operatorId };
 }
 
 export function parseAlarmActionRequest(value: unknown): AlarmActionRequest {

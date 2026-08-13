@@ -38,6 +38,7 @@ What works today:
 - Repeatable load, soak, chaos, restart, and PostgreSQL contention test gates
 - Durable ERP/WMS work orders with capability-aware, explainable robot allocation
 - Automatic work-order retry, workflow compilation, robot substitution, and controlled cancellation
+- Versioned robot capability profiles with dimensions, attachments, floor compatibility, and protocol guarantees
 
 What is not production-ready yet:
 

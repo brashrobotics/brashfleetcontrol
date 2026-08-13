@@ -55,6 +55,21 @@ export class WeightedDispatchPolicy {
     for (const capability of mission.requiredCapabilities) {
       if (!robot.capabilities.includes(capability)) rejectionReasons.push(`Missing capability: ${capability}.`);
     }
+    const constraints = mission.robotConstraints;
+    for (const attachment of constraints?.requiredAttachments ?? []) {
+      if (!(robot.capabilityMetadata.attachments ?? []).includes(attachment)) rejectionReasons.push(`Missing attachment: ${attachment}.`);
+    }
+    if (constraints?.requiredFloorType && !(robot.capabilityMetadata.supportedFloorTypes ?? []).includes(constraints.requiredFloorType)) {
+      rejectionReasons.push(`Floor type ${constraints.requiredFloorType} is unsupported.`);
+    }
+    if (constraints?.maxRobotWidthMeters !== undefined) {
+      const width = robot.capabilityMetadata.dimensionsMeters?.width;
+      if (width === undefined) rejectionReasons.push("Robot width is not declared by an assigned capability profile.");
+      else if (width > constraints.maxRobotWidthMeters) rejectionReasons.push(`Robot width ${width} m exceeds ${constraints.maxRobotWidthMeters} m.`);
+    }
+    if (constraints?.requiresCancellationSupport && robot.capabilityMetadata.supportsCancellation !== true) {
+      rejectionReasons.push("Adapter profile does not guarantee mission cancellation.");
+    }
     if (robot.batteryPercent < this.minimumBatteryPercent) {
       rejectionReasons.push(`Battery ${robot.batteryPercent}% is below the ${this.minimumBatteryPercent}% dispatch threshold.`);
     }

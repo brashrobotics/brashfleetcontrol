@@ -322,6 +322,20 @@ curl -X POST \
 The design and ownership boundaries are documented in the
 [work-order orchestrator architecture](../architecture/WORK_ORDER_ORCHESTRATOR.md).
 
+## Publish a robot capability profile
+
+Fleet administrators can version physical and protocol constraints independently
+from a vendor adapter. Create a draft with `POST /api/v1/capability-profiles`,
+publish it with `POST /api/v1/capability-profiles/{profileId}/publish`, then
+assign it to an available matching robot with
+`POST /api/v1/robots/{robotId}/capability-profile`.
+
+Assigned profiles add dimensions, floor types, attachments, cancellation
+guarantees, and adapter protocol version to the robot snapshot. Work orders can
+require these through `robotConstraints`; both initial orchestration and final
+transactional mission dispatch revalidate them. Profile metadata supplements
+the onboard safety case and does not replace it.
+
 ## Observe the fleet
 
 The dashboard analytics panel reads `GET /api/v1/analytics/operations`. Prometheus

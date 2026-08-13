@@ -6,6 +6,8 @@ import type {
   AuditEventRecord,
   AuditRepository,
   CommandClaimOptions,
+  CapabilityProfileRecord,
+  CapabilityProfileRepository,
   CommandRepository,
   InfrastructureResourceRecord,
   InfrastructureResourceRepository,
@@ -71,6 +73,7 @@ interface MissionRow {
   mission_id: string;
   external_reference: string | null;
   preferred_robot_id: string | null;
+  robot_constraints: import("@brash/contracts").RobotAssignmentConstraints | null;
   priority: number;
   required_capabilities: string[];
   payload_kg: string;
@@ -106,6 +109,15 @@ interface RobotRow {
   active_mission_id: string | null;
   last_seen_at: Date;
   connection_changed_at: Date;
+  capability_metadata: import("@brash/domain").RobotCapabilityMetadata;
+}
+
+interface CapabilityProfileRow {
+  profile_id: string; vendor: string; model: string; profile_version: number; display_name: string;
+  status: CapabilityProfileRecord["status"]; actions: string[]; max_payload_kg: string; allowed_zones: string[];
+  dimensions_meters: CapabilityProfileRecord["dimensionsMeters"]; supported_floor_types: string[]; attachments: string[];
+  supports_cancellation: boolean; adapter_protocol_version: string; created_by: string; created_at: Date;
+  published_by: string | null; published_at: Date | null; retired_by: string | null; retired_at: Date | null;
 }
 
 interface CommandRow {
@@ -308,7 +320,7 @@ interface TrafficReservationRow {
 }
 
 const MISSION_COLUMNS = `
-  mission_id, external_reference, preferred_robot_id, priority, required_capabilities, payload_kg,
+  mission_id, external_reference, preferred_robot_id, robot_constraints, priority, required_capabilities, payload_kg,
   pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
   created_at, updated_at, recovery_previous_state, recovery_started_at
 `;
@@ -318,6 +330,7 @@ const ROBOT_COLUMNS = `
   allowed_zones, sequence, observed_at, connection, availability,
   battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id,
   last_seen_at, connection_changed_at
+  , capability_metadata
 `;
 
 const TRAFFIC_PLAN_COLUMNS = `
@@ -363,15 +376,16 @@ export class PostgresMissionRepository implements MissionRepository {
     const snapshot = mission.snapshot();
     await this.database.query(`
       INSERT INTO missions (
-        mission_id, external_reference, preferred_robot_id, priority, required_capabilities, payload_kg,
+        mission_id, external_reference, preferred_robot_id, robot_constraints, priority, required_capabilities, payload_kg,
         pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
         created_at, updated_at, recovery_previous_state, recovery_started_at
       ) VALUES (
-        $1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16
+        $1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17
       )
       ON CONFLICT (mission_id) DO UPDATE SET
         external_reference = EXCLUDED.external_reference,
         preferred_robot_id = EXCLUDED.preferred_robot_id,
+        robot_constraints = EXCLUDED.robot_constraints,
         priority = EXCLUDED.priority,
         required_capabilities = EXCLUDED.required_capabilities,
         payload_kg = EXCLUDED.payload_kg,
@@ -389,6 +403,7 @@ export class PostgresMissionRepository implements MissionRepository {
       snapshot.missionId,
       snapshot.externalReference ?? null,
       snapshot.preferredRobotId ?? null,
+      snapshot.robotConstraints ? JSON.stringify(snapshot.robotConstraints) : null,
       snapshot.priority,
       JSON.stringify(snapshot.requiredCapabilities),
       snapshot.payloadKg,
@@ -698,10 +713,10 @@ export class PostgresRobotRepository implements RobotRepository {
         robot_id, display_name, vendor, model, capabilities, max_payload_kg,
         allowed_zones, sequence, observed_at, connection, availability,
         battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id,
-        updated_at, last_seen_at, connection_changed_at
+        updated_at, last_seen_at, connection_changed_at, capability_metadata
       ) VALUES (
         $1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9, $10, $11,
-        $12, $13, $14, $15, $16, $17, $18, $19, $20
+        $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb
       )
       ON CONFLICT (robot_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
@@ -722,6 +737,7 @@ export class PostgresRobotRepository implements RobotRepository {
         active_mission_id = EXCLUDED.active_mission_id,
         last_seen_at = EXCLUDED.last_seen_at,
         connection_changed_at = EXCLUDED.connection_changed_at,
+        capability_metadata = EXCLUDED.capability_metadata,
         updated_at = EXCLUDED.updated_at
     `, [
       snapshot.robotId,
@@ -744,7 +760,42 @@ export class PostgresRobotRepository implements RobotRepository {
       snapshot.observedAt,
       snapshot.lastSeenAt,
       snapshot.connectionChangedAt,
+      JSON.stringify(snapshot.capabilityMetadata),
     ]);
+  }
+}
+
+export class PostgresCapabilityProfileRepository implements CapabilityProfileRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async create(profile: CapabilityProfileRecord): Promise<void> {
+    await this.database.query(`INSERT INTO robot_capability_profiles (
+      profile_id,vendor,model,profile_version,display_name,status,actions,max_payload_kg,allowed_zones,
+      dimensions_meters,supported_floor_types,attachments,supports_cancellation,adapter_protocol_version,
+      created_by,created_at,published_by,published_at,retired_by,retired_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20)`, capabilityProfileValues(profile));
+  }
+
+  async getById(profileId: string): Promise<CapabilityProfileRecord | null> {
+    const result = await this.database.query<CapabilityProfileRow>("SELECT * FROM robot_capability_profiles WHERE profile_id=$1", [profileId]);
+    return result.rows[0] ? capabilityProfileFromRow(result.rows[0]) : null;
+  }
+
+  async list(): Promise<CapabilityProfileRecord[]> {
+    const result = await this.database.query<CapabilityProfileRow>("SELECT * FROM robot_capability_profiles ORDER BY vendor, model, profile_version DESC");
+    return result.rows.map(capabilityProfileFromRow);
+  }
+
+  async publish(profileId: string, operatorId: string, at: Date): Promise<CapabilityProfileRecord | null> {
+    const result = await this.database.query<CapabilityProfileRow>(`UPDATE robot_capability_profiles SET status='PUBLISHED', published_by=$2, published_at=$3
+      WHERE profile_id=$1 AND status='DRAFT' RETURNING *`, [profileId, operatorId, at]);
+    return result.rows[0] ? capabilityProfileFromRow(result.rows[0]) : null;
+  }
+
+  async retire(profileId: string, operatorId: string, at: Date): Promise<CapabilityProfileRecord | null> {
+    const result = await this.database.query<CapabilityProfileRow>(`UPDATE robot_capability_profiles SET status='RETIRED', retired_by=$2, retired_at=$3
+      WHERE profile_id=$1 AND status <> 'RETIRED' RETURNING *`, [profileId, operatorId, at]);
+    return result.rows[0] ? capabilityProfileFromRow(result.rows[0]) : null;
   }
 }
 
@@ -1632,6 +1683,24 @@ function workOrderValues(record: WorkOrderRecord): unknown[] {
     record.createdAt, record.updatedAt, record.completedAt];
 }
 
+function capabilityProfileValues(profile: CapabilityProfileRecord): unknown[] {
+  return [profile.profileId, profile.vendor, profile.model, profile.version, profile.displayName, profile.status,
+    JSON.stringify(profile.actions), profile.maxPayloadKg, JSON.stringify(profile.allowedZones), JSON.stringify(profile.dimensionsMeters),
+    JSON.stringify(profile.supportedFloorTypes), JSON.stringify(profile.attachments), profile.supportsCancellation,
+    profile.adapterProtocolVersion, profile.operatorId, profile.createdAt, profile.publishedBy, profile.publishedAt,
+    profile.retiredBy, profile.retiredAt];
+}
+
+function capabilityProfileFromRow(row: CapabilityProfileRow): CapabilityProfileRecord {
+  return { profileId: row.profile_id, vendor: row.vendor, model: row.model, version: row.profile_version,
+    displayName: row.display_name, status: row.status, actions: [...row.actions], maxPayloadKg: Number(row.max_payload_kg),
+    allowedZones: [...row.allowed_zones], dimensionsMeters: { ...row.dimensions_meters }, supportedFloorTypes: [...row.supported_floor_types],
+    attachments: [...row.attachments], supportsCancellation: row.supports_cancellation, adapterProtocolVersion: row.adapter_protocol_version,
+    operatorId: row.created_by, createdAt: new Date(row.created_at), publishedBy: row.published_by,
+    publishedAt: row.published_at ? new Date(row.published_at) : null, retiredBy: row.retired_by,
+    retiredAt: row.retired_at ? new Date(row.retired_at) : null };
+}
+
 function workflowStepValues(step: WorkflowStepRecord, updatedAt: Date): unknown[] {
   return [
     step.workflowId,
@@ -1711,6 +1780,7 @@ function missionFromRow(row: MissionRow): Mission {
     missionId: row.mission_id,
     ...(row.external_reference ? { externalReference: row.external_reference } : {}),
     ...(row.preferred_robot_id ? { preferredRobotId: row.preferred_robot_id } : {}),
+    ...(row.robot_constraints ? { robotConstraints: structuredClone(row.robot_constraints) } : {}),
     priority: row.priority,
     requiredCapabilities: [...row.required_capabilities],
     payloadKg: Number(row.payload_kg),
@@ -1736,6 +1806,7 @@ function robotFromRow(row: RobotRow): Robot {
     capabilities: [...row.capabilities],
     maxPayloadKg: Number(row.max_payload_kg),
     allowedZones: [...row.allowed_zones],
+    capabilityMetadata: structuredClone(row.capability_metadata ?? {}),
     sequence: Number(row.sequence),
     observedAt: new Date(row.observed_at),
     connection: row.connection,

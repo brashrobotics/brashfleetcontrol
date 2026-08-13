@@ -84,6 +84,7 @@ test("concurrent PostgreSQL queue workers claim a queued mission once", {
   const firstPersistence = createPersistence(databaseUrl!);
   const secondPersistence = createPersistence(databaseUrl!);
   await firstPersistence.migrate();
+  await closeStalePostgresTestWork(firstPersistence);
   await releaseStalePostgresTestHolds(firstPersistence);
   await firstPersistence.maps.save(createDefaultPlantTopology());
   const first = createCore(firstPersistence, `QA-${suffix}`, robotId, capability, clock);
@@ -129,6 +130,7 @@ test("concurrent PostgreSQL workflow workers lease one runnable step once", {
   const firstPersistence = createPersistence(databaseUrl!);
   const secondPersistence = createPersistence(databaseUrl!);
   await firstPersistence.migrate();
+  await closeStalePostgresTestWork(firstPersistence);
 
   try {
     await firstPersistence.workflows.create({
@@ -236,6 +238,7 @@ test("concurrent PostgreSQL orchestrator workers claim one work order once", {
   const first = createPersistence(databaseUrl!);
   const second = createPersistence(databaseUrl!);
   await first.migrate();
+  await closeStalePostgresTestWork(first);
   const now = new Date();
   const workOrderId = `PG-WORK-ORDER-${suffix}`;
   try {
@@ -317,6 +320,33 @@ test("PostgreSQL persists an allocated work order and its preferred mission robo
     await core.stop();
     await persistence.close();
   }
+});
+
+test("PostgreSQL persists published capability profiles and robot assignments", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-CAPABILITY-${suffix}`;
+  const robotModel = `SIM-AMR-${suffix}`;
+  const clock = new ManualClock(new Date().toISOString());
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  await persistence.maps.save(createDefaultPlantTopology());
+  const core = createCore(persistence, `CP-${suffix}`, robotId, `initial-${suffix}`, clock, robotModel);
+  try {
+    await core.start();
+    const draft = await core.createCapabilityProfile({ vendor: "BRASH", model: robotModel, version: 1,
+      displayName: "PostgreSQL profile", actions: [`profile-action-${suffix}`], maxPayloadKg: 900,
+      allowedZones: ["warehouse"], dimensionsMeters: { length: 1.5, width: 0.8, height: 1.1, turningRadius: 0.7 },
+      supportedFloorTypes: ["epoxy"], attachments: ["fork"], supportsCancellation: true,
+      adapterProtocolVersion: "1.0", operatorId: "postgres-capability-engineer" });
+    await core.publishCapabilityProfile(draft.profileId, "postgres-capability-approver");
+    await core.assignRobotCapabilityProfile(robotId, draft.profileId, "postgres-capability-approver");
+    const restored = await persistence.robots.getById(robotId);
+    assert.equal(restored?.capabilityMetadata.profileId, draft.profileId);
+    assert.deepEqual(restored?.capabilityMetadata.attachments, ["fork"]);
+    assert.equal((await persistence.capabilityProfiles.getById(draft.profileId))?.status, "PUBLISHED");
+  } finally { await core.stop(); await persistence.close(); }
 });
 
 test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap", {
@@ -636,6 +666,7 @@ test("PostgreSQL persists map publication and infrastructure status history", {
 });
 
 async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): Promise<void> {
+  await closeStalePostgresTestWork(persistence);
   const stale = await persistence.database.query<{ mission_id: string }>(`
     SELECT mission_id
     FROM missions
@@ -655,6 +686,28 @@ async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): 
   `);
 }
 
+async function closeStalePostgresTestWork(persistence: PostgresPersistence): Promise<void> {
+  await persistence.database.query(`
+    UPDATE workflow_steps AS step
+    SET status = 'CANCELLED', completed_at = now(), next_attempt_at = now(),
+        lease_owner = NULL, lease_expires_at = NULL
+    FROM workflows AS workflow
+    WHERE step.workflow_id = workflow.workflow_id
+      AND step.status IN ('PENDING', 'WAITING_RETRY', 'RUNNING')
+      AND (workflow.external_reference LIKE 'PG-%' OR workflow.external_reference LIKE 'work-order:%')
+  `);
+  await persistence.database.query(`
+    UPDATE workflows SET status = 'CANCELLED', completed_at = now(), updated_at = now()
+    WHERE status IN ('PENDING', 'RUNNING', 'CANCELLING')
+      AND (external_reference LIKE 'PG-%' OR external_reference LIKE 'work-order:%')
+  `);
+  await persistence.database.query(`
+    UPDATE work_orders SET status = 'CANCELLED', completed_at = now(), updated_at = now(),
+      lease_owner = NULL, lease_expires_at = NULL
+    WHERE status = 'PENDING' AND external_reference LIKE 'PG-%'
+  `);
+}
+
 function createPersistence(connectionString: string): PostgresPersistence {
   const config = loadPersistenceConfig({
     FLEET_PERSISTENCE: "postgres",
@@ -669,6 +722,7 @@ function createCore(
   robotId: string,
   capability: string,
   clock: ManualClock,
+  robotModel = "SIM-AMR",
 ): FleetCore {
   return new FleetCore({
     alarms: persistence.alarms,
@@ -685,11 +739,12 @@ function createCore(
     workflows: persistence.workflows,
     workflowResourceReservations: persistence.workflowResourceReservations,
     workOrders: persistence.workOrders,
+    capabilityProfiles: persistence.capabilityProfiles,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
     adapter: new SimulatorAdapter([
-      robotFixture({ robotId, capabilities: [capability] }),
+      robotFixture({ robotId, capabilities: [capability], model: robotModel }),
     ], { now: () => clock.now() }),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
@@ -721,6 +776,7 @@ function createMultiRobotCore(
     workflows: persistence.workflows,
     workflowResourceReservations: persistence.workflowResourceReservations,
     workOrders: persistence.workOrders,
+    capabilityProfiles: persistence.capabilityProfiles,
     transactions: persistence.transactions,
     clock,
     ids: new PrefixedIdGenerator(idPrefix),
@@ -745,15 +801,17 @@ class PrefixedIdGenerator implements IdGenerator {
   private workflow = 0;
   private workflowReservation = 0;
   private workOrder = 0;
+  private capabilityProfile = 0;
 
   constructor(private readonly prefix: string) {}
 
-  next(kind: "mission" | "command" | "route" | "workflow" | "workflowReservation" | "workOrder"): string {
+  next(kind: "mission" | "command" | "route" | "workflow" | "workflowReservation" | "workOrder" | "capabilityProfile"): string {
     if (kind === "mission") return `${this.prefix}-MISSION-${++this.mission}`;
     if (kind === "command") return `${this.prefix}-COMMAND-${++this.command}`;
     if (kind === "route") return `${this.prefix}-ROUTE-${++this.route}`;
     if (kind === "workflow") return `${this.prefix}-WORKFLOW-${++this.workflow}`;
     if (kind === "workOrder") return `${this.prefix}-WORK-ORDER-${++this.workOrder}`;
+    if (kind === "capabilityProfile") return `${this.prefix}-CAPABILITY-PROFILE-${++this.capabilityProfile}`;
     return `${this.prefix}-WORKFLOW-RESERVATION-${++this.workflowReservation}`;
   }
 }

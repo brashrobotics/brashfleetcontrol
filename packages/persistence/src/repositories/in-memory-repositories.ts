@@ -7,6 +7,8 @@ import type {
   AlarmRepository,
   CommandClaimOptions,
   CommandRepository,
+  CapabilityProfileRecord,
+  CapabilityProfileRepository,
   InfrastructureResourceRecord,
   InfrastructureResourceRepository,
   MissionEventRepository,
@@ -307,6 +309,49 @@ export class InMemoryRobotRepository implements RobotRepository {
   async save(robot: Robot): Promise<void> {
     this.robots.set(robot.robotId, robot);
   }
+}
+
+export class InMemoryCapabilityProfileRepository implements CapabilityProfileRepository {
+  private readonly profiles = new Map<string, CapabilityProfileRecord>();
+
+  async create(profile: CapabilityProfileRecord): Promise<void> {
+    if ([...this.profiles.values()].some((entry) => entry.vendor === profile.vendor && entry.model === profile.model && entry.version === profile.version)) throw new Error(`Capability profile ${profile.vendor}/${profile.model}@${profile.version} already exists.`);
+    this.profiles.set(profile.profileId, cloneCapabilityProfile(profile));
+  }
+
+  async getById(profileId: string): Promise<CapabilityProfileRecord | null> {
+    const profile = this.profiles.get(profileId);
+    return profile ? cloneCapabilityProfile(profile) : null;
+  }
+
+  async list(): Promise<CapabilityProfileRecord[]> {
+    return [...this.profiles.values()].sort((left, right) => left.vendor.localeCompare(right.vendor) || left.model.localeCompare(right.model) || right.version - left.version).map(cloneCapabilityProfile);
+  }
+
+  async publish(profileId: string, operatorId: string, at: Date): Promise<CapabilityProfileRecord | null> {
+    const profile = this.profiles.get(profileId);
+    if (!profile || profile.status !== "DRAFT") return null;
+    for (const entry of this.profiles.values()) {
+      if (entry.vendor === profile.vendor && entry.model === profile.model && entry.status === "PUBLISHED") return null;
+    }
+    profile.status = "PUBLISHED";
+    profile.publishedBy = operatorId;
+    profile.publishedAt = new Date(at);
+    return cloneCapabilityProfile(profile);
+  }
+
+  async retire(profileId: string, operatorId: string, at: Date): Promise<CapabilityProfileRecord | null> {
+    const profile = this.profiles.get(profileId);
+    if (!profile || profile.status === "RETIRED") return null;
+    profile.status = "RETIRED";
+    profile.retiredBy = operatorId;
+    profile.retiredAt = new Date(at);
+    return cloneCapabilityProfile(profile);
+  }
+}
+
+function cloneCapabilityProfile(profile: CapabilityProfileRecord): CapabilityProfileRecord {
+  return { ...profile, actions: [...profile.actions], allowedZones: [...profile.allowedZones], dimensionsMeters: { ...profile.dimensionsMeters }, supportedFloorTypes: [...profile.supportedFloorTypes], attachments: [...profile.attachments], createdAt: new Date(profile.createdAt), publishedAt: profile.publishedAt ? new Date(profile.publishedAt) : null, retiredAt: profile.retiredAt ? new Date(profile.retiredAt) : null };
 }
 
 interface StoredCommand extends PendingCommand {
