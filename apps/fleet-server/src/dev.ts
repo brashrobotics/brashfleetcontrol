@@ -9,6 +9,8 @@ import { FleetRecoveryWorker } from "./workers/fleet-recovery-worker.js";
 import { MissionDispatchWorker } from "./workers/mission-dispatch-worker.js";
 import { WorkflowWorker } from "./workers/workflow-worker.js";
 import { WorkOrderWorker } from "./workers/work-order-worker.js";
+import { IntegrationOutboxWorker } from "./workers/integration-outbox-worker.js";
+import { HttpIntegrationEventPublisher } from "./modules/integrations/http-integration-publisher.js";
 
 const persistenceConfig = loadPersistenceConfig();
 const postgresSystem = persistenceConfig.mode === "postgres"
@@ -31,6 +33,17 @@ const workflowWorker = new WorkflowWorker(core, { onError: workerError("workflow
 workflowWorker.start();
 const workOrderWorker = new WorkOrderWorker(core, { onError: workerError("work_order") });
 workOrderWorker.start();
+const integrationWebhookUrl = process.env.FLEET_INTEGRATION_WEBHOOK_URL?.trim();
+const integrationOutboxWorker = integrationWebhookUrl ? new IntegrationOutboxWorker(
+  system.integrationEvents,
+  new HttpIntegrationEventPublisher({
+    endpoint: integrationWebhookUrl,
+    signingSecret: process.env.FLEET_INTEGRATION_WEBHOOK_SECRET,
+    timeoutMs: Number(process.env.FLEET_INTEGRATION_WEBHOOK_TIMEOUT_MS ?? 10_000),
+  }),
+  { onError: workerError("integration_outbox") },
+) : null;
+integrationOutboxWorker?.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
 const server = createServer(async (incoming, outgoing) => {
@@ -62,6 +75,7 @@ async function shutdown(): Promise<void> {
   dispatchWorker.stop();
   workflowWorker.stop();
   workOrderWorker.stop();
+  integrationOutboxWorker?.stop();
   await core.stop();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());

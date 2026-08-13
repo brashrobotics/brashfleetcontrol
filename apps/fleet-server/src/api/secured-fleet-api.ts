@@ -150,6 +150,7 @@ export class SecuredFleetApi {
 function authorizationRule(method: string, pathname: string): AuthorizationRule {
   if (method === "GET" && pathname === "/api/v1/audit/events") return rule("audit:read", "audit.list", "AUDIT", "events", false);
   if (method === "GET" && pathname === "/api/v1/metrics") return rule("observability:read", "observability.metrics", "OBSERVABILITY", "metrics", false);
+  if (method === "GET" && pathname === "/api/v1/integrations/events") return rule("integration:read", "integration.events.list", "INTEGRATION_EVENT", "collection", false);
   if (method === "GET") return rule("fleet:read", "fleet.read", target(pathname).type, target(pathname).id, false);
   if (method === "POST" && pathname === "/api/v1/missions") return rule("mission:create", "mission.create", "MISSION", "new", true);
   if (/^\/api\/v1\/missions\/[^/]+\/dispatch$/.test(pathname)) return rule("mission:dispatch", "mission.dispatch", "MISSION", segment(pathname, -2), true);
@@ -157,6 +158,7 @@ function authorizationRule(method: string, pathname: string): AuthorizationRule 
   if (method === "POST" && pathname === "/api/v1/workflows") return rule("workflow:create", "workflow.create", "WORKFLOW", "new", true);
   if (/^\/api\/v1\/workflows\/[^/]+\/cancel$/.test(pathname)) return rule("workflow:cancel", "workflow.cancel", "WORKFLOW", segment(pathname, -2), true);
   if (method === "POST" && pathname === "/api/v1/work-orders") return rule("orchestrator:submit", "work_order.submit", "WORK_ORDER", "new", true);
+  if (/^\/api\/v1\/integrations\/events\/[^/]+\/redrive$/.test(pathname)) return rule("integration:manage", "integration.event.redrive", "INTEGRATION_EVENT", segment(pathname, -2), true);
   if (/^\/api\/v1\/work-orders\/[^/]+\/cancel$/.test(pathname)) return rule("orchestrator:cancel", "work_order.cancel", "WORK_ORDER", segment(pathname, -2), true);
   if (pathname.startsWith("/api/v1/capability-profiles") || /^\/api\/v1\/robots\/[^/]+\/capability-profile$/.test(pathname)) return rule("capability:manage", "capability.manage", "CAPABILITY_PROFILE", target(pathname).id, true);
   if (/^\/api\/v1\/alarms\/[^/]+\/acknowledge$/.test(pathname)) return rule("alarm:acknowledge", "alarm.acknowledge", "ALARM", segment(pathname, -2), true);
@@ -169,6 +171,7 @@ function authorizationRule(method: string, pathname: string): AuthorizationRule 
 function routeTemplate(pathname: string): string {
   return pathname
     .replace(/^\/api\/v1\/(missions|workflows|work-orders|alarms|map-versions|capability-profiles)\/[^/]+/, "/api/v1/$1/:id")
+    .replace(/^\/api\/v1\/integrations\/events\/[^/]+/, "/api/v1/integrations/events/:id")
     .replace(/^\/api\/v1\/maps\/[^/]+/, "/api/v1/maps/:id")
     .replace(/^\/api\/v1\/traffic\/restrictions\/[^/]+/, "/api/v1/traffic/restrictions/:id")
     .replace(/^\/api\/v1\/infrastructure\/resources\/[^/]+/, "/api/v1/infrastructure/resources/:id");

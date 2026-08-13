@@ -307,6 +307,11 @@ test("PostgreSQL persists an allocated work order and its preferred mission robo
     assert.equal(created.selectedRobotId, robotId);
     assert.ok(created.workflowId);
     assert.equal((await persistence.workOrders.getById(created.workOrderId))?.workflowId, created.workflowId);
+    assert.deepEqual(
+      (await persistence.integrationEvents.list({ aggregateType: "WORK_ORDER", aggregateId: created.workOrderId, limit: 10 }))
+        .map((event) => event.eventType).sort(),
+      ["WORK_ORDER_ALLOCATED", "WORK_ORDER_CREATED"],
+    );
 
     assert.equal(await core.processWorkflowQueue(), 1);
     const mission = (await core.getSnapshot()).missions.find((entry) => entry.externalReference?.startsWith("workflow:"));
@@ -315,6 +320,8 @@ test("PostgreSQL persists an allocated work order and its preferred mission robo
     assert.equal(mission.assignedRobotId, robotId);
     assert.equal((await persistence.missions.getById(mission.missionId))?.preferredRobotId, robotId);
     assert.equal((await core.getWorkOrder(created.workOrderId)).status, "RUNNING");
+    assert.ok((await persistence.integrationEvents.list({ aggregateId: created.workOrderId, limit: 10 }))
+      .some((event) => event.eventType === "WORK_ORDER_STATUS_CHANGED" && event.payload.status === "RUNNING"));
     await persistence.traffic.releaseByMission(mission.missionId, clock.now());
   } finally {
     await core.stop();
@@ -734,6 +741,7 @@ function createCore(
     events: persistence.events,
     maps: persistence.maps,
     infrastructureResources: persistence.infrastructureResources,
+    integrationEvents: persistence.integrationEvents,
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
     workflows: persistence.workflows,
@@ -771,6 +779,7 @@ function createMultiRobotCore(
     events: persistence.events,
     maps: persistence.maps,
     infrastructureResources: persistence.infrastructureResources,
+    integrationEvents: persistence.integrationEvents,
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
     workflows: persistence.workflows,

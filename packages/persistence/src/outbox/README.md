@@ -30,3 +30,9 @@ outbox row.
 
 This is at-least-once delivery. Every robot adapter must return the original
 receipt when it receives a duplicate `commandId`.
+
+Enterprise events use the separate `integration_event_outbox`. Work-order
+state and its corresponding event are committed atomically. Rows have a stable
+event ID and idempotency key, delivery lease, attempt history, downstream HTTP
+status, and terminal dead-letter state. Manual redrive resets only delivery
+metadata; it never mutates the original payload or idempotency key.

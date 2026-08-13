@@ -11,6 +11,10 @@ import type {
   CommandRepository,
   InfrastructureResourceRecord,
   InfrastructureResourceRepository,
+  IntegrationEventClaimOptions,
+  IntegrationEventFilter,
+  IntegrationEventRecord,
+  IntegrationEventRepository,
   MapTopologyRepository,
   MapVersionRecord,
   MissionEventRepository,
@@ -278,6 +282,25 @@ interface WorkOrderRow {
   created_at: Date;
   updated_at: Date;
   completed_at: Date | null;
+}
+
+interface IntegrationEventRow {
+  event_id: string;
+  idempotency_key: string;
+  event_type: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  payload: Record<string, unknown>;
+  status: IntegrationEventRecord["status"];
+  attempt_count: number;
+  occurred_at: Date;
+  next_attempt_at: Date;
+  last_attempt_at: Date | null;
+  delivered_at: Date | null;
+  last_error: string | null;
+  response_status: number | null;
+  lease_owner: string | null;
+  lease_expires_at: Date | null;
 }
 
 interface TrafficPlanRow {
@@ -1263,6 +1286,88 @@ export class PostgresWorkOrderRepository implements WorkOrderRepository {
   }
 }
 
+export class PostgresIntegrationEventRepository implements IntegrationEventRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async enqueue(event: IntegrationEventRecord): Promise<void> {
+    await this.database.query(`
+      INSERT INTO integration_event_outbox (
+        event_id, idempotency_key, event_type, aggregate_type, aggregate_id,
+        payload, status, attempt_count, occurred_at, next_attempt_at,
+        last_attempt_at, delivered_at, last_error, response_status,
+        lease_owner, lease_expires_at
+      ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      ON CONFLICT (idempotency_key) DO NOTHING
+    `, integrationEventValues(event));
+  }
+
+  async getById(eventId: string): Promise<IntegrationEventRecord | null> {
+    const result = await this.database.query<IntegrationEventRow>("SELECT * FROM integration_event_outbox WHERE event_id=$1", [eventId]);
+    return result.rows[0] ? integrationEventFromRow(result.rows[0]) : null;
+  }
+
+  async list(filter: IntegrationEventFilter): Promise<IntegrationEventRecord[]> {
+    const result = await this.database.query<IntegrationEventRow>(`
+      SELECT * FROM integration_event_outbox
+      WHERE ($1::text IS NULL OR status=$1)
+        AND ($2::text IS NULL OR aggregate_type=$2)
+        AND ($3::text IS NULL OR aggregate_id=$3)
+      ORDER BY occurred_at DESC, event_id
+      LIMIT $4
+    `, [filter.status ?? null, filter.aggregateType ?? null, filter.aggregateId ?? null, filter.limit]);
+    return result.rows.map(integrationEventFromRow);
+  }
+
+  async claimDue(limit: number, options: IntegrationEventClaimOptions): Promise<IntegrationEventRecord[]> {
+    const result = await this.database.query<IntegrationEventRow>(`
+      WITH claimable AS (
+        SELECT event_id FROM integration_event_outbox
+        WHERE status='PENDING' AND next_attempt_at <= $1
+          AND (lease_expires_at IS NULL OR lease_expires_at <= $1)
+        ORDER BY next_attempt_at, occurred_at, event_id
+        FOR UPDATE SKIP LOCKED LIMIT $2
+      )
+      UPDATE integration_event_outbox AS event
+      SET lease_owner=$3, lease_expires_at=$4
+      FROM claimable WHERE event.event_id=claimable.event_id
+      RETURNING event.*
+    `, [options.claimedAt, limit, options.workerId, new Date(options.claimedAt.getTime() + options.leaseDurationMs)]);
+    return result.rows.map(integrationEventFromRow);
+  }
+
+  async recordDelivered(eventId: string, deliveredAt: Date, responseStatus: number): Promise<IntegrationEventRecord | null> {
+    const result = await this.database.query<IntegrationEventRow>(`
+      UPDATE integration_event_outbox SET status='DELIVERED', attempt_count=attempt_count+1,
+        last_attempt_at=$2, delivered_at=$2, last_error=NULL, response_status=$3,
+        lease_owner=NULL, lease_expires_at=NULL
+      WHERE event_id=$1 AND status='PENDING' RETURNING *
+    `, [eventId, deliveredAt, responseStatus]);
+    return result.rows[0] ? integrationEventFromRow(result.rows[0]) : null;
+  }
+
+  async recordFailure(eventId: string, attemptedAt: Date, nextAttemptAt: Date, error: string, maxAttempts: number, responseStatus?: number): Promise<IntegrationEventRecord | null> {
+    const result = await this.database.query<IntegrationEventRow>(`
+      UPDATE integration_event_outbox SET
+        attempt_count=attempt_count+1,
+        status=CASE WHEN attempt_count+1 >= $6 THEN 'DEAD_LETTER' ELSE 'PENDING' END,
+        last_attempt_at=$2, next_attempt_at=$3, last_error=$4, response_status=$5,
+        lease_owner=NULL, lease_expires_at=NULL
+      WHERE event_id=$1 AND status='PENDING' RETURNING *
+    `, [eventId, attemptedAt, nextAttemptAt, error, responseStatus ?? null, maxAttempts]);
+    return result.rows[0] ? integrationEventFromRow(result.rows[0]) : null;
+  }
+
+  async redrive(eventId: string, at: Date): Promise<IntegrationEventRecord | null> {
+    const result = await this.database.query<IntegrationEventRow>(`
+      UPDATE integration_event_outbox SET status='PENDING', attempt_count=0,
+        next_attempt_at=$2, last_error=NULL, response_status=NULL,
+        lease_owner=NULL, lease_expires_at=NULL
+      WHERE event_id=$1 AND status='DEAD_LETTER' RETURNING *
+    `, [eventId, at]);
+    return result.rows[0] ? integrationEventFromRow(result.rows[0]) : null;
+  }
+}
+
 export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
   constructor(private readonly database: PostgresDatabase) {}
 
@@ -1681,6 +1786,34 @@ function workOrderValues(record: WorkOrderRecord): unknown[] {
     record.selectedRobotId, record.workflowId, JSON.stringify(record.candidates), record.allocationAttemptCount,
     record.nextAttemptAt, record.lastAttemptAt, record.failureReason, record.leaseOwner, record.leaseExpiresAt,
     record.createdAt, record.updatedAt, record.completedAt];
+}
+
+function integrationEventFromRow(row: IntegrationEventRow): IntegrationEventRecord {
+  return {
+    eventId: row.event_id,
+    idempotencyKey: row.idempotency_key,
+    eventType: row.event_type,
+    aggregateType: row.aggregate_type,
+    aggregateId: row.aggregate_id,
+    payload: structuredClone(row.payload),
+    status: row.status,
+    attemptCount: row.attempt_count,
+    occurredAt: new Date(row.occurred_at),
+    nextAttemptAt: new Date(row.next_attempt_at),
+    lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at) : null,
+    deliveredAt: row.delivered_at ? new Date(row.delivered_at) : null,
+    lastError: row.last_error,
+    responseStatus: row.response_status,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
+  };
+}
+
+function integrationEventValues(record: IntegrationEventRecord): unknown[] {
+  return [record.eventId, record.idempotencyKey, record.eventType, record.aggregateType, record.aggregateId,
+    JSON.stringify(record.payload), record.status, record.attemptCount, record.occurredAt, record.nextAttemptAt,
+    record.lastAttemptAt, record.deliveredAt, record.lastError, record.responseStatus, record.leaseOwner,
+    record.leaseExpiresAt];
 }
 
 function capabilityProfileValues(profile: CapabilityProfileRecord): unknown[] {

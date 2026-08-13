@@ -12,6 +12,7 @@ import type {
   InfrastructureReservationPolicy,
   InfrastructureResourceStatus,
   InfrastructureResourceType,
+  IntegrationDeliveryStatus,
   MapVersionStatus,
   MissionCommand,
   MissionEventType,
@@ -136,6 +137,48 @@ export interface WorkOrderRepository {
   create(workOrder: WorkOrderRecord): Promise<void>;
   save(workOrder: WorkOrderRecord): Promise<void>;
   claimPending(limit: number, options: WorkOrderClaimOptions): Promise<WorkOrderRecord[]>;
+}
+
+export interface IntegrationEventRecord {
+  eventId: string;
+  idempotencyKey: string;
+  eventType: string;
+  aggregateType: string;
+  aggregateId: string;
+  payload: Record<string, unknown>;
+  status: IntegrationDeliveryStatus;
+  attemptCount: number;
+  occurredAt: Date;
+  nextAttemptAt: Date;
+  lastAttemptAt: Date | null;
+  deliveredAt: Date | null;
+  lastError: string | null;
+  responseStatus: number | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
+}
+
+export interface IntegrationEventClaimOptions {
+  workerId: string;
+  claimedAt: Date;
+  leaseDurationMs: number;
+}
+
+export interface IntegrationEventFilter {
+  status?: IntegrationDeliveryStatus;
+  aggregateType?: string;
+  aggregateId?: string;
+  limit: number;
+}
+
+export interface IntegrationEventRepository {
+  enqueue(event: IntegrationEventRecord): Promise<void>;
+  getById(eventId: string): Promise<IntegrationEventRecord | null>;
+  list(filter: IntegrationEventFilter): Promise<IntegrationEventRecord[]>;
+  claimDue(limit: number, options: IntegrationEventClaimOptions): Promise<IntegrationEventRecord[]>;
+  recordDelivered(eventId: string, deliveredAt: Date, responseStatus: number): Promise<IntegrationEventRecord | null>;
+  recordFailure(eventId: string, attemptedAt: Date, nextAttemptAt: Date, error: string, maxAttempts: number, responseStatus?: number): Promise<IntegrationEventRecord | null>;
+  redrive(eventId: string, at: Date): Promise<IntegrationEventRecord | null>;
 }
 
 export type MissionQueueOutcome = "DISPATCHED" | "CANCELLED";

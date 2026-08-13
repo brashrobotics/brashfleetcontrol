@@ -51,3 +51,8 @@ complete candidate evaluation, retries when no robot is currently eligible,
 and compiles a successful allocation into a durable workflow. Expiring leases
 and PostgreSQL `SKIP LOCKED` claims prevent duplicate processing across server
 instances.
+
+`IntegrationOutboxWorker` starts only when `FLEET_INTEGRATION_WEBHOOK_URL` is
+configured. It claims up to 25 enterprise events, publishes them with stable
+idempotency headers, applies bounded exponential backoff with deterministic
+jitter, and moves poison events to `DEAD_LETTER` after 12 attempts.

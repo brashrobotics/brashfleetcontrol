@@ -17,6 +17,8 @@ import {
   type FleetSnapshot,
   type InfrastructureResourceStatus,
   type InfrastructureResourceView,
+  type IntegrationDeliveryStatus,
+  type IntegrationEventView,
   type MapTopologyView,
   type MapVersionView,
   type MissionCancellationResult,
@@ -61,6 +63,7 @@ import type {
   CommandRepository,
   InfrastructureResourceRecord,
   InfrastructureResourceRepository,
+  IntegrationEventRepository,
   MissionEventRepository,
   MissionQueueEntry,
   MissionQueueRepository,
@@ -93,6 +96,7 @@ export interface FleetCoreDependencies {
   events: MissionEventRepository;
   maps: MapTopologyRepository;
   infrastructureResources: InfrastructureResourceRepository;
+  integrationEvents: IntegrationEventRepository;
   traffic: TrafficPlanRepository;
   trafficRestrictions: TrafficRestrictionRepository;
   workflows: WorkflowRepository;
@@ -777,7 +781,10 @@ export class FleetCore {
       completedAt: null,
     };
     try {
-      await this.dependencies.workOrders.create(record);
+      await this.dependencies.transactions.runExclusive(async () => {
+        await this.dependencies.workOrders.create(record);
+        await this.enqueueWorkOrderEvent(record, "WORK_ORDER_CREATED");
+      });
     } catch (error) {
       if (request.externalReference) {
         const existing = await this.dependencies.workOrders.findByExternalReference(request.externalReference);
@@ -831,8 +838,24 @@ export class FleetCore {
     record.failureReason = null;
     record.leaseOwner = null;
     record.leaseExpiresAt = null;
-    await this.dependencies.workOrders.save(record);
+    await this.saveWorkOrderWithEvent(record, "WORK_ORDER_STATUS_CHANGED");
     return this.workOrderToView(record);
+  }
+
+  async listIntegrationEvents(filter: { status?: IntegrationDeliveryStatus; aggregateType?: string; aggregateId?: string; limit?: number } = {}): Promise<IntegrationEventView[]> {
+    const events = await this.dependencies.integrationEvents.list({
+      ...(filter.status ? { status: filter.status } : {}),
+      ...(filter.aggregateType ? { aggregateType: filter.aggregateType } : {}),
+      ...(filter.aggregateId ? { aggregateId: filter.aggregateId } : {}),
+      limit: Math.min(500, Math.max(1, filter.limit ?? 100)),
+    });
+    return events.map((event) => this.integrationEventToView(event));
+  }
+
+  async redriveIntegrationEvent(eventId: string): Promise<IntegrationEventView> {
+    const event = await this.dependencies.integrationEvents.redrive(eventId, this.dependencies.clock.now());
+    if (!event) throw new DomainError("INTEGRATION_EVENT_NOT_REDRIVABLE", `Integration event ${eventId} is not in the dead-letter queue.`);
+    return this.integrationEventToView(event);
   }
 
   async getMissionEvents(missionId: string): Promise<MissionEventView[]> {
@@ -1760,7 +1783,7 @@ export class FleetCore {
       record.failureReason = decision.reasons.join(" ");
       const retryMs = Math.min(this.workOrderRetryMaxMs, this.workOrderRetryBaseMs * (2 ** Math.min(10, record.allocationAttemptCount - 1)));
       record.nextAttemptAt = new Date(now.getTime() + retryMs);
-      await this.dependencies.workOrders.save(record);
+      await this.saveWorkOrderWithEvent(record, "WORK_ORDER_ALLOCATION_DEFERRED");
       return;
     }
 
@@ -1771,12 +1794,12 @@ export class FleetCore {
       record.status = "ALLOCATED";
       record.nextAttemptAt = now;
       record.failureReason = null;
-      await this.dependencies.workOrders.save(record);
+      await this.saveWorkOrderWithEvent(record, "WORK_ORDER_ALLOCATED");
     } catch (error) {
       record.status = "FAILED";
       record.completedAt = now;
       record.failureReason = error instanceof Error ? error.message : "Work-order workflow compilation failed.";
-      await this.dependencies.workOrders.save(record);
+      await this.saveWorkOrderWithEvent(record, "WORK_ORDER_FAILED");
     }
   }
 
@@ -1872,7 +1895,7 @@ export class FleetCore {
     record.updatedAt = now;
     record.failureReason = workflow.failureReason;
     record.completedAt = ["SUCCEEDED", "FAILED", "CANCELLED"].includes(nextStatus) ? now : null;
-    await this.dependencies.workOrders.save(record);
+    await this.saveWorkOrderWithEvent(record, "WORK_ORDER_STATUS_CHANGED");
   }
 
   private workOrderToView(record: WorkOrderRecord): WorkOrderView {
@@ -1890,6 +1913,47 @@ export class FleetCore {
       createdAt: record.createdAt.toISOString(),
       updatedAt: record.updatedAt.toISOString(),
       completedAt: record.completedAt?.toISOString() ?? null,
+    };
+  }
+
+  private async saveWorkOrderWithEvent(record: WorkOrderRecord, eventType: string): Promise<void> {
+    await this.dependencies.transactions.runExclusive(async () => {
+      await this.dependencies.workOrders.save(record);
+      await this.enqueueWorkOrderEvent(record, eventType);
+    });
+  }
+
+  private async enqueueWorkOrderEvent(record: WorkOrderRecord, eventType: string): Promise<void> {
+    const occurredAt = new Date(record.updatedAt);
+    await this.dependencies.integrationEvents.enqueue({
+      eventId: this.dependencies.ids.next("integrationEvent"),
+      idempotencyKey: `work-order:${record.workOrderId}:${eventType}:${record.status}:${record.allocationAttemptCount}:${record.selectedRobotId ?? "unassigned"}:${occurredAt.toISOString()}`,
+      eventType,
+      aggregateType: "WORK_ORDER",
+      aggregateId: record.workOrderId,
+      payload: this.workOrderToView(record) as unknown as Record<string, unknown>,
+      status: "PENDING",
+      attemptCount: 0,
+      occurredAt,
+      nextAttemptAt: occurredAt,
+      lastAttemptAt: null,
+      deliveredAt: null,
+      lastError: null,
+      responseStatus: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+  }
+
+  private integrationEventToView(event: import("./ports/repositories.js").IntegrationEventRecord): IntegrationEventView {
+    return {
+      ...event,
+      payload: structuredClone(event.payload),
+      occurredAt: event.occurredAt.toISOString(),
+      nextAttemptAt: event.nextAttemptAt.toISOString(),
+      lastAttemptAt: event.lastAttemptAt?.toISOString() ?? null,
+      deliveredAt: event.deliveredAt?.toISOString() ?? null,
+      leaseExpiresAt: event.leaseExpiresAt?.toISOString() ?? null,
     };
   }
 
@@ -2047,7 +2111,7 @@ export class FleetCore {
     if (!workOrder || workOrder.selectedRobotId === robotId || ["SUCCEEDED", "FAILED", "CANCELLED"].includes(workOrder.status)) return;
     workOrder.selectedRobotId = robotId;
     workOrder.updatedAt = now;
-    await this.dependencies.workOrders.save(workOrder);
+    await this.saveWorkOrderWithEvent(workOrder, "WORK_ORDER_ROBOT_SUBSTITUTED");
   }
 
   private async ensureWorkflowResource(step: WorkflowStepRecord, now: Date): Promise<void> {

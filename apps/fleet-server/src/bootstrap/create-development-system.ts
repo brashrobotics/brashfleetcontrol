@@ -18,6 +18,7 @@ import {
   InMemoryCommandRepository,
   InMemoryCapabilityProfileRepository,
   InMemoryInfrastructureResourceRepository,
+  InMemoryIntegrationEventRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
@@ -84,6 +85,7 @@ export function createDevelopmentSystem() {
   const topology = createDefaultPlantTopology();
   const infrastructureResources = new InMemoryInfrastructureResourceRepository(defaultInfrastructureResources());
 
+  const integrationEvents = new InMemoryIntegrationEventRepository();
   const core = new FleetCore({
     alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
@@ -94,6 +96,7 @@ export function createDevelopmentSystem() {
     events: new InMemoryMissionEventRepository(),
     maps: new InMemoryMapTopologyRepository([topology]),
     infrastructureResources,
+    integrationEvents,
     traffic: new InMemoryTrafficPlanRepository(),
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     workflows: new InMemoryWorkflowRepository(),
@@ -119,7 +122,7 @@ export function createDevelopmentSystem() {
     audit,
     observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
   });
-  return { core, api, adapter, audit, metrics, logger };
+  return { core, api, adapter, audit, integrationEvents, metrics, logger };
 }
 
 export function defaultInfrastructureResources(now = new Date()): InfrastructureResourceRecord[] {

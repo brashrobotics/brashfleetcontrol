@@ -11,6 +11,10 @@ import type {
   CapabilityProfileRepository,
   InfrastructureResourceRecord,
   InfrastructureResourceRepository,
+  IntegrationEventClaimOptions,
+  IntegrationEventFilter,
+  IntegrationEventRecord,
+  IntegrationEventRepository,
   MissionEventRepository,
   MissionQueueClaimOptions,
   MissionQueueEntry,
@@ -755,6 +759,84 @@ export class InMemoryWorkOrderRepository implements WorkOrderRepository {
   }
 }
 
+export class InMemoryIntegrationEventRepository implements IntegrationEventRepository {
+  private readonly events = new Map<string, IntegrationEventRecord>();
+
+  async enqueue(event: IntegrationEventRecord): Promise<void> {
+    if ([...this.events.values()].some((candidate) => candidate.idempotencyKey === event.idempotencyKey)) return;
+    this.events.set(event.eventId, cloneIntegrationEvent(event));
+  }
+
+  async getById(eventId: string): Promise<IntegrationEventRecord | null> {
+    const event = this.events.get(eventId);
+    return event ? cloneIntegrationEvent(event) : null;
+  }
+
+  async list(filter: IntegrationEventFilter): Promise<IntegrationEventRecord[]> {
+    return [...this.events.values()]
+      .filter((event) => !filter.status || event.status === filter.status)
+      .filter((event) => !filter.aggregateType || event.aggregateType === filter.aggregateType)
+      .filter((event) => !filter.aggregateId || event.aggregateId === filter.aggregateId)
+      .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime() || left.eventId.localeCompare(right.eventId))
+      .slice(0, filter.limit)
+      .map(cloneIntegrationEvent);
+  }
+
+  async claimDue(limit: number, options: IntegrationEventClaimOptions): Promise<IntegrationEventRecord[]> {
+    const due = [...this.events.values()]
+      .filter((event) => event.status === "PENDING" && event.nextAttemptAt.getTime() <= options.claimedAt.getTime())
+      .filter((event) => !event.leaseExpiresAt || event.leaseExpiresAt.getTime() <= options.claimedAt.getTime())
+      .sort((left, right) => left.nextAttemptAt.getTime() - right.nextAttemptAt.getTime() || left.occurredAt.getTime() - right.occurredAt.getTime())
+      .slice(0, limit);
+    for (const event of due) {
+      event.leaseOwner = options.workerId;
+      event.leaseExpiresAt = new Date(options.claimedAt.getTime() + options.leaseDurationMs);
+    }
+    return due.map(cloneIntegrationEvent);
+  }
+
+  async recordDelivered(eventId: string, deliveredAt: Date, responseStatus: number): Promise<IntegrationEventRecord | null> {
+    const event = this.events.get(eventId);
+    if (!event || event.status !== "PENDING") return null;
+    event.status = "DELIVERED";
+    event.attemptCount += 1;
+    event.lastAttemptAt = new Date(deliveredAt);
+    event.deliveredAt = new Date(deliveredAt);
+    event.lastError = null;
+    event.responseStatus = responseStatus;
+    event.leaseOwner = null;
+    event.leaseExpiresAt = null;
+    return cloneIntegrationEvent(event);
+  }
+
+  async recordFailure(eventId: string, attemptedAt: Date, nextAttemptAt: Date, error: string, maxAttempts: number, responseStatus?: number): Promise<IntegrationEventRecord | null> {
+    const event = this.events.get(eventId);
+    if (!event || event.status !== "PENDING") return null;
+    event.attemptCount += 1;
+    event.status = event.attemptCount >= maxAttempts ? "DEAD_LETTER" : "PENDING";
+    event.lastAttemptAt = new Date(attemptedAt);
+    event.nextAttemptAt = new Date(nextAttemptAt);
+    event.lastError = error;
+    event.responseStatus = responseStatus ?? null;
+    event.leaseOwner = null;
+    event.leaseExpiresAt = null;
+    return cloneIntegrationEvent(event);
+  }
+
+  async redrive(eventId: string, at: Date): Promise<IntegrationEventRecord | null> {
+    const event = this.events.get(eventId);
+    if (!event || event.status !== "DEAD_LETTER") return null;
+    event.status = "PENDING";
+    event.attemptCount = 0;
+    event.nextAttemptAt = new Date(at);
+    event.lastError = null;
+    event.responseStatus = null;
+    event.leaseOwner = null;
+    event.leaseExpiresAt = null;
+    return cloneIntegrationEvent(event);
+  }
+}
+
 function cloneMapVersion(record: MapVersionRecord): MapVersionRecord {
   return {
     ...record,
@@ -972,6 +1054,18 @@ function cloneWorkOrder(record: WorkOrderRecord): WorkOrderRecord {
     createdAt: new Date(record.createdAt),
     updatedAt: new Date(record.updatedAt),
     completedAt: record.completedAt ? new Date(record.completedAt) : null,
+  };
+}
+
+function cloneIntegrationEvent(record: IntegrationEventRecord): IntegrationEventRecord {
+  return {
+    ...record,
+    payload: structuredClone(record.payload),
+    occurredAt: new Date(record.occurredAt),
+    nextAttemptAt: new Date(record.nextAttemptAt),
+    lastAttemptAt: record.lastAttemptAt ? new Date(record.lastAttemptAt) : null,
+    deliveredAt: record.deliveredAt ? new Date(record.deliveredAt) : null,
+    leaseExpiresAt: record.leaseExpiresAt ? new Date(record.leaseExpiresAt) : null,
   };
 }
 

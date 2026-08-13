@@ -8,6 +8,7 @@ import {
   InMemoryCommandRepository,
   InMemoryCapabilityProfileRepository,
   InMemoryInfrastructureResourceRepository,
+  InMemoryIntegrationEventRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
@@ -63,6 +64,7 @@ export function createTestFleetSystem(options: {
   const events = new InMemoryMissionEventRepository();
   const maps = new InMemoryMapTopologyRepository([createDefaultPlantTopology()]);
   const infrastructureResources = new InMemoryInfrastructureResourceRepository();
+  const integrationEvents = new InMemoryIntegrationEventRepository();
   const traffic = new InMemoryTrafficPlanRepository();
   const trafficRestrictions = new InMemoryTrafficRestrictionRepository();
   const workflows = new InMemoryWorkflowRepository();
@@ -79,6 +81,7 @@ export function createTestFleetSystem(options: {
     events,
     maps,
     infrastructureResources,
+    integrationEvents,
     traffic,
     trafficRestrictions,
     workflows,
@@ -96,5 +99,5 @@ export function createTestFleetSystem(options: {
     instanceId: "test-fleet-core",
   }, options.coreOptions);
 
-  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, capabilityProfiles, decisions, events, maps, infrastructureResources, traffic, trafficRestrictions, workflows, workflowResourceReservations, workOrders, transactions };
+  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, capabilityProfiles, decisions, events, maps, infrastructureResources, integrationEvents, traffic, trafficRestrictions, workflows, workflowResourceReservations, workOrders, transactions };
 }

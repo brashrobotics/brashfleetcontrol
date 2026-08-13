@@ -61,6 +61,25 @@ export class FleetApi {
         return json({ workOrders: await this.core.listWorkOrders() });
       }
 
+      if (request.method === "GET" && url.pathname === "/api/v1/integrations/events") {
+        const status = url.searchParams.get("status");
+        if (status && !["PENDING", "DELIVERED", "DEAD_LETTER"].includes(status)) {
+          return json({ error: { code: "INTEGRATION_STATUS_INVALID", message: "status must be PENDING, DELIVERED, or DEAD_LETTER." } }, 400);
+        }
+        const requestedLimit = Number(url.searchParams.get("limit") ?? 100);
+        return json({ events: await this.core.listIntegrationEvents({
+          ...(status ? { status: status as "PENDING" | "DELIVERED" | "DEAD_LETTER" } : {}),
+          ...(url.searchParams.get("aggregateType") ? { aggregateType: url.searchParams.get("aggregateType")! } : {}),
+          ...(url.searchParams.get("aggregateId") ? { aggregateId: url.searchParams.get("aggregateId")! } : {}),
+          limit: Number.isInteger(requestedLimit) ? requestedLimit : 100,
+        }) });
+      }
+
+      const integrationRedriveMatch = url.pathname.match(/^\/api\/v1\/integrations\/events\/([^/]+)\/redrive$/);
+      if (request.method === "POST" && integrationRedriveMatch) {
+        return json({ event: await this.core.redriveIntegrationEvent(decodeURIComponent(integrationRedriveMatch[1])) });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/v1/capability-profiles") {
         return json({ profiles: await this.core.listCapabilityProfiles() });
       }

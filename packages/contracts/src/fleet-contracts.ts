@@ -244,6 +244,27 @@ export interface WorkOrderView extends Omit<CreateWorkOrderRequest, "externalRef
   completedAt: string | null;
 }
 
+export type IntegrationDeliveryStatus = "PENDING" | "DELIVERED" | "DEAD_LETTER";
+
+export interface IntegrationEventView {
+  eventId: string;
+  idempotencyKey: string;
+  eventType: string;
+  aggregateType: string;
+  aggregateId: string;
+  payload: Record<string, unknown>;
+  status: IntegrationDeliveryStatus;
+  attemptCount: number;
+  occurredAt: string;
+  nextAttemptAt: string;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  lastError: string | null;
+  responseStatus: number | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+}
+
 export type FleetRole = "VIEWER" | "OPERATOR" | "DISPATCHER" | "FLEET_ADMIN" | "INTEGRATION";
 export type FleetPermission =
   | "fleet:read"
@@ -259,6 +280,8 @@ export type FleetPermission =
   | "map:manage"
   | "resource:manage"
   | "capability:manage"
+  | "integration:read"
+  | "integration:manage"
   | "observability:read"
   | "audit:read";
 

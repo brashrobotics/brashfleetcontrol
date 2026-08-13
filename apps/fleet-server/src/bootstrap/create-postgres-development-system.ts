@@ -37,6 +37,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       events: persistence.events,
       maps: persistence.maps,
       infrastructureResources: persistence.infrastructureResources,
+      integrationEvents: persistence.integrationEvents,
       traffic: persistence.traffic,
       trafficRestrictions: persistence.trafficRestrictions,
       workflows: persistence.workflows,
@@ -61,7 +62,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       audit: persistence.audit,
       observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
     });
-    return { core, api, adapter, persistence, metrics, logger };
+    return { core, api, adapter, persistence, integrationEvents: persistence.integrationEvents, metrics, logger };
   } catch (error) {
     await persistence.close();
     throw error;
