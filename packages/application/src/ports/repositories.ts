@@ -24,6 +24,8 @@ import type {
   OrchestratorCandidateView,
   WorkflowStepDefinition,
   WorkflowStepStatus,
+  CreateWorkflowTemplateRequest,
+  WorkflowTemplateStatus,
 } from "@brash/contracts";
 import type {
   MapTopology,
@@ -87,6 +89,24 @@ export interface WorkflowRepository {
   claimRunnable(limit: number, options: WorkflowClaimOptions): Promise<WorkflowStepRecord[]>;
   saveStep(step: WorkflowStepRecord): Promise<void>;
   saveWorkflow(workflow: WorkflowRecord): Promise<void>;
+}
+
+export interface WorkflowTemplateRecord extends CreateWorkflowTemplateRequest {
+  templateId: string;
+  status: WorkflowTemplateStatus;
+  createdAt: Date;
+  publishedBy: string | null;
+  publishedAt: Date | null;
+  retiredBy: string | null;
+  retiredAt: Date | null;
+}
+
+export interface WorkflowTemplateRepository {
+  create(template: WorkflowTemplateRecord): Promise<void>;
+  getById(templateId: string): Promise<WorkflowTemplateRecord | null>;
+  list(templateKey?: string): Promise<WorkflowTemplateRecord[]>;
+  publish(templateId: string, operatorId: string, at: Date): Promise<WorkflowTemplateRecord | null>;
+  retire(templateId: string, operatorId: string, at: Date): Promise<WorkflowTemplateRecord | null>;
 }
 
 export interface WorkflowResourceReservationRecord {

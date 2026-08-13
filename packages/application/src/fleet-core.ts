@@ -1,5 +1,6 @@
 import {
   FLEET_SCHEMA_VERSION,
+  parseCreateWorkflowRequest,
   type AlarmSummaryView,
   type AlarmView,
   type AssignmentDecision,
@@ -10,6 +11,8 @@ import {
   type CreateMapVersionRequest,
   type CreateMissionRequest,
   type CreateWorkflowRequest,
+  type CreateWorkflowTemplateRequest,
+  type InstantiateWorkflowTemplateRequest,
   type CreateWorkOrderRequest,
   type DispatchQueueView,
   type DispatchResult,
@@ -36,6 +39,7 @@ import {
   type TrafficRestrictionView,
   type TrafficScheduleView,
   type WorkflowView,
+  type WorkflowTemplateView,
   type WorkOrderView,
 } from "@brash/contracts";
 import {
@@ -83,6 +87,8 @@ import type {
   TransactionManager,
   WorkflowRecord,
   WorkflowRepository,
+  WorkflowTemplateRecord,
+  WorkflowTemplateRepository,
   WorkflowResourceReservationRepository,
   WorkflowStepRecord,
   WorkOrderRecord,
@@ -106,6 +112,7 @@ export interface FleetCoreDependencies {
   traffic: TrafficPlanRepository;
   trafficRestrictions: TrafficRestrictionRepository;
   workflows: WorkflowRepository;
+  workflowTemplates: WorkflowTemplateRepository;
   workflowResourceReservations: WorkflowResourceReservationRepository;
   workOrders: WorkOrderRepository;
   capabilityProfiles: CapabilityProfileRepository;
@@ -856,6 +863,89 @@ export class FleetCore {
   async listWorkflows(): Promise<WorkflowView[]> {
     const records = await this.dependencies.workflows.list();
     return Promise.all(records.map((record) => this.getWorkflow(record.workflowId)));
+  }
+
+  async createWorkflowTemplate(request: CreateWorkflowTemplateRequest): Promise<WorkflowTemplateView> {
+    this.assertStarted();
+    const now = this.dependencies.clock.now();
+    const template: WorkflowTemplateRecord = {
+      ...structuredClone(request),
+      templateId: `${request.templateKey}@${request.version}`,
+      status: "DRAFT",
+      createdAt: now,
+      publishedBy: null,
+      publishedAt: null,
+      retiredBy: null,
+      retiredAt: null,
+    };
+    try {
+      await this.dependencies.workflowTemplates.create(template);
+    } catch (error) {
+      if (isUniqueConstraintViolation(error) || (error instanceof Error && error.message.includes("already exists"))) {
+        throw new DomainError("WORKFLOW_TEMPLATE_EXISTS", `Workflow template ${template.templateId} already exists.`);
+      }
+      throw error;
+    }
+    return this.workflowTemplateToView(template);
+  }
+
+  async getWorkflowTemplate(templateId: string): Promise<WorkflowTemplateView> {
+    const template = await this.dependencies.workflowTemplates.getById(templateId);
+    if (!template) throw new DomainError("WORKFLOW_TEMPLATE_NOT_FOUND", `Workflow template ${templateId} was not found.`);
+    return this.workflowTemplateToView(template);
+  }
+
+  async listWorkflowTemplates(templateKey?: string): Promise<WorkflowTemplateView[]> {
+    return (await this.dependencies.workflowTemplates.list(templateKey)).map((template) => this.workflowTemplateToView(template));
+  }
+
+  async publishWorkflowTemplate(templateId: string, operatorId: string): Promise<WorkflowTemplateView> {
+    try {
+      const template = await this.dependencies.workflowTemplates.publish(templateId, operatorId, this.dependencies.clock.now());
+      if (!template) throw new DomainError("WORKFLOW_TEMPLATE_NOT_DRAFT", `Workflow template ${templateId} is not a draft.`);
+      return this.workflowTemplateToView(template);
+    } catch (error) {
+      if (isUniqueConstraintViolation(error) || (error instanceof Error && error.message.includes("published version"))) {
+        throw new DomainError("WORKFLOW_TEMPLATE_PUBLISHED_VERSION_EXISTS", "Retire the currently published version before publishing another revision.");
+      }
+      throw error;
+    }
+  }
+
+  async retireWorkflowTemplate(templateId: string, operatorId: string): Promise<WorkflowTemplateView> {
+    const template = await this.dependencies.workflowTemplates.retire(templateId, operatorId, this.dependencies.clock.now());
+    if (!template) throw new DomainError("WORKFLOW_TEMPLATE_NOT_PUBLISHED", `Workflow template ${templateId} is not published.`);
+    return this.workflowTemplateToView(template);
+  }
+
+  async instantiateWorkflowTemplate(templateId: string, request: InstantiateWorkflowTemplateRequest): Promise<WorkflowView> {
+    const template = await this.dependencies.workflowTemplates.getById(templateId);
+    if (!template || template.status !== "PUBLISHED") {
+      throw new DomainError("WORKFLOW_TEMPLATE_NOT_PUBLISHED", `Workflow template ${templateId} is not published.`);
+    }
+    const definitions = new Map(template.parameters.map((parameter) => [parameter.name, parameter]));
+    for (const supplied of Object.keys(request.parameters)) {
+      if (!definitions.has(supplied)) throw new DomainError("WORKFLOW_TEMPLATE_PARAMETER_UNKNOWN", `Parameter ${supplied} is not defined by ${templateId}.`);
+    }
+    const values: Record<string, string> = {};
+    for (const parameter of template.parameters) {
+      const value = request.parameters[parameter.name] ?? parameter.defaultValue;
+      if (!value && parameter.required) throw new DomainError("WORKFLOW_TEMPLATE_PARAMETER_REQUIRED", `Parameter ${parameter.name} is required.`);
+      if (value && parameter.allowedValues && !parameter.allowedValues.includes(value)) {
+        throw new DomainError("WORKFLOW_TEMPLATE_PARAMETER_INVALID", `Parameter ${parameter.name} must be one of its allowed values.`);
+      }
+      if (value) values[parameter.name] = value;
+    }
+    const expanded = substituteTemplate(template.steps, values);
+    if (/\{\{[A-Za-z_][A-Za-z0-9_]*\}\}/.test(JSON.stringify(expanded))) {
+      throw new DomainError("WORKFLOW_TEMPLATE_PARAMETER_REQUIRED", "Every parameter referenced by template steps must resolve to a value.");
+    }
+    const workflow = parseCreateWorkflowRequest({
+      name: request.name ?? template.name,
+      ...(request.externalReference ? { externalReference: request.externalReference } : {}),
+      steps: expanded,
+    });
+    return this.createWorkflow(workflow);
   }
 
   async processWorkflowQueue(limit = 10): Promise<number> {
@@ -1920,6 +2010,15 @@ export class FleetCore {
     };
   }
 
+  private workflowTemplateToView(template: WorkflowTemplateRecord): WorkflowTemplateView {
+    return {
+      ...structuredClone(template),
+      createdAt: template.createdAt.toISOString(),
+      publishedAt: template.publishedAt?.toISOString() ?? null,
+      retiredAt: template.retiredAt?.toISOString() ?? null,
+    };
+  }
+
   private async allocateWorkOrder(record: WorkOrderRecord): Promise<void> {
     if (record.status !== "PENDING") return;
     const now = this.dependencies.clock.now();
@@ -2538,6 +2637,17 @@ export class FleetCore {
 
 function isUniqueConstraintViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
+}
+
+function substituteTemplate<T>(value: T, parameters: Record<string, string>): T {
+  if (typeof value === "string") {
+    return value.replace(/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/g, (placeholder, name: string) => parameters[name] ?? placeholder) as T;
+  }
+  if (Array.isArray(value)) return value.map((entry) => substituteTemplate(entry, parameters)) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, substituteTemplate(entry, parameters)])) as T;
+  }
+  return value;
 }
 
 function capabilityMetadataFromDescriptor(capabilities: import("@brash/contracts").RobotCapabilities): import("@brash/domain").RobotCapabilityMetadata {

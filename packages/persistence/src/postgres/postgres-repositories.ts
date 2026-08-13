@@ -37,6 +37,8 @@ import type {
   WorkflowClaimOptions,
   WorkflowRecord,
   WorkflowRepository,
+  WorkflowTemplateRecord,
+  WorkflowTemplateRepository,
   WorkflowResourceReservationRecord,
   WorkflowResourceReservationRepository,
   WorkflowStepRecord,
@@ -57,6 +59,7 @@ import type {
   MissionEventView,
   FleetRole,
   WorkflowStepDefinition,
+  WorkflowTemplateParameterDefinition,
   CreateWorkOrderRequest,
   OrchestratorCandidateView,
   WorkOrderStatus,
@@ -266,6 +269,23 @@ interface WorkflowStepRow {
   last_error: string | null;
   lease_owner: string | null;
   lease_expires_at: Date | null;
+}
+
+interface WorkflowTemplateRow {
+  template_id: string;
+  template_key: string;
+  version: number;
+  name: string;
+  description: string;
+  parameter_schema: WorkflowTemplateParameterDefinition[];
+  steps: WorkflowStepDefinition[];
+  status: WorkflowTemplateRecord["status"];
+  operator_id: string;
+  created_at: Date;
+  published_by: string | null;
+  published_at: Date | null;
+  retired_by: string | null;
+  retired_at: Date | null;
 }
 
 interface WorkflowResourceReservationRow {
@@ -1244,6 +1264,51 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
   }
 }
 
+export class PostgresWorkflowTemplateRepository implements WorkflowTemplateRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async create(template: WorkflowTemplateRecord): Promise<void> {
+    await this.database.query(`
+      INSERT INTO workflow_templates (
+        template_id, template_key, version, name, description, parameter_schema,
+        steps, status, operator_id, created_at, published_by, published_at,
+        retired_by, retired_at
+      ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13,$14)
+    `, [template.templateId, template.templateKey, template.version, template.name,
+      template.description, JSON.stringify(template.parameters), JSON.stringify(template.steps),
+      template.status, template.operatorId, template.createdAt, template.publishedBy,
+      template.publishedAt, template.retiredBy, template.retiredAt]);
+  }
+
+  async getById(templateId: string): Promise<WorkflowTemplateRecord | null> {
+    const result = await this.database.query<WorkflowTemplateRow>("SELECT * FROM workflow_templates WHERE template_id=$1", [templateId]);
+    return result.rows[0] ? workflowTemplateFromRow(result.rows[0]) : null;
+  }
+
+  async list(templateKey?: string): Promise<WorkflowTemplateRecord[]> {
+    const result = templateKey
+      ? await this.database.query<WorkflowTemplateRow>("SELECT * FROM workflow_templates WHERE template_key=$1 ORDER BY version DESC", [templateKey])
+      : await this.database.query<WorkflowTemplateRow>("SELECT * FROM workflow_templates ORDER BY template_key, version DESC");
+    return result.rows.map(workflowTemplateFromRow);
+  }
+
+  async publish(templateId: string, operatorId: string, at: Date): Promise<WorkflowTemplateRecord | null> {
+    const result = await this.database.query<WorkflowTemplateRow>(`
+      UPDATE workflow_templates SET status='PUBLISHED', published_by=$2, published_at=$3
+      WHERE template_id=$1 AND status='DRAFT' RETURNING *
+    `, [templateId, operatorId, at]);
+    return result.rows[0] ? workflowTemplateFromRow(result.rows[0]) : null;
+  }
+
+  async retire(templateId: string, operatorId: string, at: Date): Promise<WorkflowTemplateRecord | null> {
+    const result = await this.database.query<WorkflowTemplateRow>(`
+      UPDATE workflow_templates SET status='RETIRED', retired_by=$2, retired_at=$3
+      WHERE template_id=$1 AND status='PUBLISHED' RETURNING *
+    `, [templateId, operatorId, at]);
+    return result.rows[0] ? workflowTemplateFromRow(result.rows[0]) : null;
+  }
+}
+
 export class PostgresWorkflowResourceReservationRepository implements WorkflowResourceReservationRepository {
   constructor(private readonly database: PostgresDatabase) {}
 
@@ -1832,6 +1897,25 @@ function workflowFromRow(row: WorkflowRow): WorkflowRecord {
     updatedAt: new Date(row.updated_at),
     completedAt: row.completed_at ? new Date(row.completed_at) : null,
     failureReason: row.failure_reason,
+  };
+}
+
+function workflowTemplateFromRow(row: WorkflowTemplateRow): WorkflowTemplateRecord {
+  return {
+    templateId: row.template_id,
+    templateKey: row.template_key,
+    version: row.version,
+    name: row.name,
+    description: row.description,
+    parameters: structuredClone(row.parameter_schema),
+    steps: structuredClone(row.steps),
+    status: row.status,
+    operatorId: row.operator_id,
+    createdAt: new Date(row.created_at),
+    publishedBy: row.published_by,
+    publishedAt: row.published_at ? new Date(row.published_at) : null,
+    retiredBy: row.retired_by,
+    retiredAt: row.retired_at ? new Date(row.retired_at) : null,
   };
 }
 

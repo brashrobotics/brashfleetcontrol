@@ -30,6 +30,7 @@ import {
   InMemoryTrafficPlanRepository,
   InMemoryTrafficRestrictionRepository,
   InMemoryWorkflowRepository,
+  InMemoryWorkflowTemplateRepository,
   InMemoryWorkflowResourceReservationRepository,
   InMemoryWorkOrderRepository,
 } from "@brash/persistence";
@@ -110,6 +111,7 @@ export function createDevelopmentSystem(siteId = "plant-a") {
     traffic: new InMemoryTrafficPlanRepository(),
     trafficRestrictions: new InMemoryTrafficRestrictionRepository(),
     workflows: new InMemoryWorkflowRepository(),
+    workflowTemplates: new InMemoryWorkflowTemplateRepository(),
     workflowResourceReservations: new InMemoryWorkflowResourceReservationRepository(),
     workOrders: new InMemoryWorkOrderRepository(),
     capabilityProfiles: new InMemoryCapabilityProfileRepository(),

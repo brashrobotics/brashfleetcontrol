@@ -18,6 +18,7 @@ import {
   InMemoryTrafficPlanRepository,
   InMemoryTrafficRestrictionRepository,
   InMemoryWorkflowRepository,
+  InMemoryWorkflowTemplateRepository,
   InMemoryWorkflowResourceReservationRepository,
   InMemoryWorkOrderRepository,
 } from "@brash/persistence";
@@ -69,6 +70,7 @@ export function createTestFleetSystem(options: {
   const traffic = new InMemoryTrafficPlanRepository();
   const trafficRestrictions = new InMemoryTrafficRestrictionRepository();
   const workflows = new InMemoryWorkflowRepository();
+  const workflowTemplates = new InMemoryWorkflowTemplateRepository();
   const workflowResourceReservations = new InMemoryWorkflowResourceReservationRepository();
   const workOrders = new InMemoryWorkOrderRepository();
   const transactions = new InMemoryTransactionManager();
@@ -87,6 +89,7 @@ export function createTestFleetSystem(options: {
     traffic,
     trafficRestrictions,
     workflows,
+    workflowTemplates,
     workflowResourceReservations,
     workOrders,
     capabilityProfiles,
@@ -101,5 +104,5 @@ export function createTestFleetSystem(options: {
     instanceId: "test-fleet-core",
   }, options.coreOptions);
 
-  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, capabilityProfiles, decisions, events, maps, infrastructureResources, integrationEvents, traffic, trafficRestrictions, workflows, workflowResourceReservations, workOrders, transactions };
+  return { core, adapter, clock, ids, alarms, missions, missionQueue, robots, commands, capabilityProfiles, decisions, events, maps, infrastructureResources, integrationEvents, traffic, trafficRestrictions, workflows, workflowTemplates, workflowResourceReservations, workOrders, transactions };
 }

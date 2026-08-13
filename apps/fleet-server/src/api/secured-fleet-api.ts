@@ -167,6 +167,8 @@ function authorizationRule(method: string, pathname: string): AuthorizationRule 
   if (/^\/api\/v1\/missions\/[^/]+\/reassign-recovery$/.test(pathname)) return rule("recovery:manage", "mission.recovery.reassign", "MISSION", segment(pathname, -2), true);
   if (/^\/api\/v1\/robots\/[^/]+\/(quarantine|release-quarantine)$/.test(pathname)) return rule("recovery:manage", "robot.quarantine.manage", "ROBOT", segment(pathname, -2), true);
   if (method === "POST" && pathname === "/api/v1/workflows") return rule("workflow:create", "workflow.create", "WORKFLOW", "new", true);
+  if (/^\/api\/v1\/workflow-templates\/[^/]+\/instantiate$/.test(pathname)) return rule("workflow:create", "workflow_template.instantiate", "WORKFLOW_TEMPLATE", segment(pathname, -2), true);
+  if (pathname.startsWith("/api/v1/workflow-templates")) return rule("template:manage", "workflow_template.manage", "WORKFLOW_TEMPLATE", target(pathname).id, true);
   if (/^\/api\/v1\/workflows\/[^/]+\/cancel$/.test(pathname)) return rule("workflow:cancel", "workflow.cancel", "WORKFLOW", segment(pathname, -2), true);
   if (method === "POST" && pathname === "/api/v1/work-orders") return rule("orchestrator:submit", "work_order.submit", "WORK_ORDER", "new", true);
   if (/^\/api\/v1\/integrations\/events\/[^/]+\/redrive$/.test(pathname)) return rule("integration:manage", "integration.event.redrive", "INTEGRATION_EVENT", segment(pathname, -2), true);
@@ -229,7 +231,7 @@ function segment(pathname: string, offset: number): string {
 async function bindOperatorIdentity(request: Request, principal: FleetPrincipal): Promise<Request> {
   if (!request.headers.get("content-type")?.includes("application/json")) return request;
   const body = await request.clone().json().catch(() => null) as unknown;
-  if (!body || typeof body !== "object" || !("operatorId" in body)) return request;
+  if (!body || typeof body !== "object") return request;
   const headers = new Headers(request.headers);
   headers.delete("content-length");
   return new Request(request.url, { method: request.method, headers, body: JSON.stringify({ ...body, operatorId: principal.subjectId }) });

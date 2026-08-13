@@ -7,6 +7,7 @@ import {
   WorkOrderAllocationPolicy,
   createDefaultPlantTopology,
   type IdGenerator,
+  type WorkflowTemplateRecord,
 } from "@brash/application";
 import { MapTopology, RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { loadPersistenceConfig } from "@brash/config";
@@ -808,6 +809,31 @@ test("PostgreSQL leader election permits one owner and fences an expired leader"
   }
 });
 
+test("PostgreSQL persists workflow template lifecycle and immutable revisions", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  const template: WorkflowTemplateRecord = {
+    templateId: `pg-template-${suffix}@1`, templateKey: `pg-template-${suffix}`, version: 1,
+    name: "PostgreSQL template", description: "Persistence verification", parameters: [],
+    steps: [{ stepId: "wait", name: "Wait", type: "WAIT", dependsOn: [], timeoutSeconds: 10, maxAttempts: 1, retryDelaySeconds: 0, durationSeconds: 1 }],
+    operatorId: "postgres-test", status: "DRAFT", createdAt: new Date(),
+    publishedBy: null, publishedAt: null, retiredBy: null, retiredAt: null,
+  };
+  try {
+    await persistence.workflowTemplates.create(template);
+    assert.equal((await persistence.workflowTemplates.publish(template.templateId, "publisher", new Date()))?.status, "PUBLISHED");
+    const stored = await persistence.workflowTemplates.getById(template.templateId);
+    assert.equal(stored?.steps[0].name, "Wait");
+    assert.equal(stored?.publishedBy, "publisher");
+    assert.equal((await persistence.workflowTemplates.retire(template.templateId, "publisher", new Date()))?.status, "RETIRED");
+  } finally {
+    await persistence.close();
+  }
+});
+
 function createPersistence(connectionString: string, schema = "public"): PostgresPersistence {
   const config = loadPersistenceConfig({
     FLEET_PERSISTENCE: "postgres",
@@ -840,6 +866,7 @@ function createCore(
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
     workflows: persistence.workflows,
+    workflowTemplates: persistence.workflowTemplates,
     workflowResourceReservations: persistence.workflowResourceReservations,
     workOrders: persistence.workOrders,
     capabilityProfiles: persistence.capabilityProfiles,
@@ -879,6 +906,7 @@ function createMultiRobotCore(
     traffic: persistence.traffic,
     trafficRestrictions: persistence.trafficRestrictions,
     workflows: persistence.workflows,
+    workflowTemplates: persistence.workflowTemplates,
     workflowResourceReservations: persistence.workflowResourceReservations,
     workOrders: persistence.workOrders,
     capabilityProfiles: persistence.capabilityProfiles,

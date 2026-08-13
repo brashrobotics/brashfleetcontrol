@@ -8,6 +8,8 @@ import {
   parseCreateMissionRequest,
   parseCreateTrafficRestrictionRequest,
   parseCreateWorkflowRequest,
+  parseCreateWorkflowTemplateRequest,
+  parseInstantiateWorkflowTemplateRequest,
   parseCreateWorkOrderRequest,
   parseQuarantineRobotRequest,
   parseReassignRecoveryMissionRequest,
@@ -74,6 +76,35 @@ export class FleetApi {
 
       if (request.method === "GET" && url.pathname === "/api/v1/workflows") {
         return json({ workflows: await this.core.listWorkflows() });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/workflow-templates") {
+        return json({ templates: await this.core.listWorkflowTemplates(url.searchParams.get("templateKey") ?? undefined) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/v1/workflow-templates") {
+        return json({ template: await this.core.createWorkflowTemplate(parseCreateWorkflowTemplateRequest(await request.json())) }, 201);
+      }
+
+      const templateLifecycleMatch = url.pathname.match(/^\/api\/v1\/workflow-templates\/([^/]+)\/(publish|retire)$/);
+      if (request.method === "POST" && templateLifecycleMatch) {
+        const input = parseAlarmActionRequest(await request.json());
+        const templateId = decodeURIComponent(templateLifecycleMatch[1]);
+        const template = templateLifecycleMatch[2] === "publish"
+          ? await this.core.publishWorkflowTemplate(templateId, input.operatorId)
+          : await this.core.retireWorkflowTemplate(templateId, input.operatorId);
+        return json({ template });
+      }
+
+      const templateInstantiationMatch = url.pathname.match(/^\/api\/v1\/workflow-templates\/([^/]+)\/instantiate$/);
+      if (request.method === "POST" && templateInstantiationMatch) {
+        const input = parseInstantiateWorkflowTemplateRequest(await request.json());
+        return json({ workflow: await this.core.instantiateWorkflowTemplate(decodeURIComponent(templateInstantiationMatch[1]), input) }, 201);
+      }
+
+      const templateMatch = url.pathname.match(/^\/api\/v1\/workflow-templates\/([^/]+)$/);
+      if (request.method === "GET" && templateMatch) {
+        return json({ template: await this.core.getWorkflowTemplate(decodeURIComponent(templateMatch[1])) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/v1/work-orders") {

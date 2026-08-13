@@ -227,6 +227,41 @@ export interface WorkflowView {
   steps: WorkflowStepView[];
 }
 
+export type WorkflowTemplateStatus = "DRAFT" | "PUBLISHED" | "RETIRED";
+
+export interface WorkflowTemplateParameterDefinition {
+  name: string;
+  required: boolean;
+  defaultValue?: string;
+  allowedValues?: string[];
+}
+
+export interface CreateWorkflowTemplateRequest {
+  templateKey: string;
+  version: number;
+  name: string;
+  description: string;
+  parameters: WorkflowTemplateParameterDefinition[];
+  steps: WorkflowStepDefinition[];
+  operatorId: string;
+}
+
+export interface InstantiateWorkflowTemplateRequest {
+  name?: string;
+  externalReference?: string;
+  parameters: Record<string, string>;
+}
+
+export interface WorkflowTemplateView extends CreateWorkflowTemplateRequest {
+  templateId: string;
+  status: WorkflowTemplateStatus;
+  createdAt: string;
+  publishedBy: string | null;
+  publishedAt: string | null;
+  retiredBy: string | null;
+  retiredAt: string | null;
+}
+
 export type WorkOrderStatus = "PENDING" | "ALLOCATED" | "RUNNING" | "CANCELLING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 export type WorkOrderFollowUpType = "WAIT" | "CHARGE" | "INSPECT" | "DOCK";
 
@@ -301,6 +336,7 @@ export type FleetPermission =
   | "mission:cancel"
   | "workflow:create"
   | "workflow:cancel"
+  | "template:manage"
   | "orchestrator:submit"
   | "orchestrator:cancel"
   | "alarm:acknowledge"

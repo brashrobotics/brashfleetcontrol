@@ -52,6 +52,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig, si
       traffic: persistence.traffic,
       trafficRestrictions: persistence.trafficRestrictions,
       workflows: persistence.workflows,
+      workflowTemplates: persistence.workflowTemplates,
       workflowResourceReservations: persistence.workflowResourceReservations,
       workOrders: persistence.workOrders,
       capabilityProfiles: persistence.capabilityProfiles,

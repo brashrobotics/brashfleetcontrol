@@ -8,6 +8,8 @@ import type {
   CreateTrafficRestrictionRequest,
   CreateWorkOrderRequest,
   CreateWorkflowRequest,
+  CreateWorkflowTemplateRequest,
+  InstantiateWorkflowTemplateRequest,
   InfrastructureReservationPolicy,
   InfrastructureResourceStatus,
   InfrastructureResourceType,
@@ -354,6 +356,65 @@ export function parseCreateWorkflowRequest(value: unknown): CreateWorkflowReques
   if (!hasAcyclicDependencies(steps)) issues.push("workflow step dependencies must form an acyclic graph.");
   if (issues.length > 0) throw new ContractValidationError(issues);
   return { name, ...(externalReference ? { externalReference } : {}), steps };
+}
+
+export function parseCreateWorkflowTemplateRequest(value: unknown): CreateWorkflowTemplateRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const templateKey = nonEmptyString(value.templateKey, "templateKey", issues);
+  if (templateKey && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(templateKey)) issues.push("templateKey must be lowercase kebab-case.");
+  const version = finiteNumber(value.version, "version", issues);
+  if (!Number.isInteger(version) || version < 1) issues.push("version must be a positive integer.");
+  const name = nonEmptyString(value.name, "name", issues);
+  const description = nonEmptyString(value.description, "description", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  const parameters = Array.isArray(value.parameters) ? value.parameters.map((parameter, index) => {
+    const path = `parameters[${index}]`;
+    if (!isRecord(parameter)) {
+      issues.push(`${path} must be an object.`);
+      return { name: "", required: false };
+    }
+    const parameterName = nonEmptyString(parameter.name, `${path}.name`, issues);
+    if (parameterName && !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(parameterName)) issues.push(`${path}.name is invalid.`);
+    if (typeof parameter.required !== "boolean") issues.push(`${path}.required must be a boolean.`);
+    const defaultValue = parameter.defaultValue === undefined ? undefined : nonEmptyString(parameter.defaultValue, `${path}.defaultValue`, issues);
+    const allowedValues = parameter.allowedValues === undefined ? undefined : Array.isArray(parameter.allowedValues)
+      ? parameter.allowedValues.map((entry, allowedIndex) => nonEmptyString(entry, `${path}.allowedValues[${allowedIndex}]`, issues))
+      : (issues.push(`${path}.allowedValues must be an array.`), undefined);
+    if (allowedValues && new Set(allowedValues).size !== allowedValues.length) issues.push(`${path}.allowedValues must be unique.`);
+    if (defaultValue && allowedValues && !allowedValues.includes(defaultValue)) issues.push(`${path}.defaultValue must be allowed.`);
+    return { name: parameterName, required: parameter.required === true, ...(defaultValue ? { defaultValue } : {}), ...(allowedValues ? { allowedValues } : {}) };
+  }) : (issues.push("parameters must be an array."), []);
+  const parameterNames = new Set<string>();
+  for (const parameter of parameters) {
+    if (parameterNames.has(parameter.name)) issues.push(`parameter ${parameter.name} is duplicated.`);
+    parameterNames.add(parameter.name);
+  }
+  let steps: WorkflowStepDefinition[] = [];
+  try {
+    steps = parseCreateWorkflowRequest({ name, steps: value.steps }).steps;
+  } catch (error) {
+    if (error instanceof ContractValidationError) issues.push(...error.issues);
+  }
+  const placeholders = JSON.stringify(value.steps ?? []).matchAll(/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/g);
+  for (const match of placeholders) if (!parameterNames.has(match[1])) issues.push(`template references unknown parameter ${match[1]}.`);
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { templateKey, version, name, description, parameters, steps, operatorId };
+}
+
+export function parseInstantiateWorkflowTemplateRequest(value: unknown): InstantiateWorkflowTemplateRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const name = value.name === undefined ? undefined : nonEmptyString(value.name, "name", issues);
+  const externalReference = value.externalReference === undefined ? undefined : nonEmptyString(value.externalReference, "externalReference", issues);
+  const parameters: Record<string, string> = {};
+  if (!isRecord(value.parameters)) issues.push("parameters must be an object.");
+  else for (const [key, entry] of Object.entries(value.parameters)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key) || typeof entry !== "string" || !entry) issues.push(`parameters.${key} must be a non-empty string.`);
+    else parameters[key] = entry;
+  }
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { ...(name ? { name } : {}), ...(externalReference ? { externalReference } : {}), parameters };
 }
 
 function parseWorkflowStep(value: unknown, index: number, issues: string[]): WorkflowStepDefinition {

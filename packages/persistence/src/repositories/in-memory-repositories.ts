@@ -37,6 +37,8 @@ import type {
   WorkflowClaimOptions,
   WorkflowRecord,
   WorkflowRepository,
+  WorkflowTemplateRecord,
+  WorkflowTemplateRepository,
   WorkflowResourceReservationRecord,
   WorkflowResourceReservationRepository,
   WorkflowStepRecord,
@@ -716,6 +718,49 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
   }
 }
 
+export class InMemoryWorkflowTemplateRepository implements WorkflowTemplateRepository {
+  private readonly templates = new Map<string, WorkflowTemplateRecord>();
+
+  async create(template: WorkflowTemplateRecord): Promise<void> {
+    if (this.templates.has(template.templateId) || [...this.templates.values()].some((entry) => entry.templateKey === template.templateKey && entry.version === template.version)) {
+      throw new Error(`Workflow template ${template.templateKey}@${template.version} already exists.`);
+    }
+    this.templates.set(template.templateId, cloneWorkflowTemplate(template));
+  }
+
+  async getById(templateId: string): Promise<WorkflowTemplateRecord | null> {
+    const template = this.templates.get(templateId);
+    return template ? cloneWorkflowTemplate(template) : null;
+  }
+
+  async list(templateKey?: string): Promise<WorkflowTemplateRecord[]> {
+    return [...this.templates.values()].filter((entry) => !templateKey || entry.templateKey === templateKey)
+      .sort((left, right) => left.templateKey.localeCompare(right.templateKey) || right.version - left.version)
+      .map(cloneWorkflowTemplate);
+  }
+
+  async publish(templateId: string, operatorId: string, at: Date): Promise<WorkflowTemplateRecord | null> {
+    const template = this.templates.get(templateId);
+    if (!template || template.status !== "DRAFT") return null;
+    if ([...this.templates.values()].some((entry) => entry.templateKey === template.templateKey && entry.status === "PUBLISHED")) {
+      throw new Error(`Workflow template ${template.templateKey} already has a published version.`);
+    }
+    template.status = "PUBLISHED";
+    template.publishedBy = operatorId;
+    template.publishedAt = new Date(at);
+    return cloneWorkflowTemplate(template);
+  }
+
+  async retire(templateId: string, operatorId: string, at: Date): Promise<WorkflowTemplateRecord | null> {
+    const template = this.templates.get(templateId);
+    if (!template || template.status !== "PUBLISHED") return null;
+    template.status = "RETIRED";
+    template.retiredBy = operatorId;
+    template.retiredAt = new Date(at);
+    return cloneWorkflowTemplate(template);
+  }
+}
+
 export class InMemoryWorkflowResourceReservationRepository implements WorkflowResourceReservationRepository {
   private readonly reservations = new Map<string, WorkflowResourceReservationRecord>();
 
@@ -920,6 +965,15 @@ function cloneInfrastructureResource(record: InfrastructureResourceRecord): Infr
 
 function cloneWorkflow(record: WorkflowRecord): WorkflowRecord {
   return { ...record, createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt), completedAt: record.completedAt ? new Date(record.completedAt) : null };
+}
+
+function cloneWorkflowTemplate(record: WorkflowTemplateRecord): WorkflowTemplateRecord {
+  return {
+    ...structuredClone(record),
+    createdAt: new Date(record.createdAt),
+    publishedAt: record.publishedAt ? new Date(record.publishedAt) : null,
+    retiredAt: record.retiredAt ? new Date(record.retiredAt) : null,
+  };
 }
 
 function cloneWorkflowStep(record: WorkflowStepRecord): WorkflowStepRecord {

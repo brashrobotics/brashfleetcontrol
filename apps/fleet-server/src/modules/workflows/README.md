@@ -18,6 +18,10 @@ Runs durable, dependency-aware factory operations above individual transport mis
 - Serializes service steps through exclusive charger, dock, or workcell reservations.
 - Fails fast after final step failure and cancels unstarted sibling steps.
 - Exposes create, list, detail, and cancellation operations under `/api/v1/workflows`.
+- Stores immutable `templateKey@version` catalog entries with draft, published,
+  and retired lifecycle states under `/api/v1/workflow-templates`.
+- Expands declared `{{parameterName}}` values with required/default/allow-list
+  constraints, then revalidates the resulting workflow contract before creation.
 
 ## Boundaries
 
@@ -33,5 +37,4 @@ the workflow, step, and attempt so mission creation remains idempotent.
 
 ## Next responsibilities
 
-Add workflow templates, conditional branches, human approval steps, compensation
-policies, and the capability-aware work-order orchestrator planned for phase 10.
+Add conditional branches, human approval steps, and compensation policies.
