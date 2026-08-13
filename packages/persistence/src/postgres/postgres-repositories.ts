@@ -15,6 +15,8 @@ import type {
   IntegrationEventFilter,
   IntegrationEventRecord,
   IntegrationEventRepository,
+  LeaderLeaseRecord,
+  LeaderLeaseRepository,
   MapTopologyRepository,
   MapVersionRecord,
   MissionEventRepository,
@@ -313,6 +315,15 @@ interface IntegrationEventRow {
   response_status: number | null;
   lease_owner: string | null;
   lease_expires_at: Date | null;
+}
+
+interface LeaderLeaseRow {
+  resource_name: string;
+  owner_id: string;
+  fencing_token: string;
+  acquired_at: Date;
+  renewed_at: Date;
+  expires_at: Date;
 }
 
 interface TrafficPlanRow {
@@ -1414,6 +1425,55 @@ export class PostgresIntegrationEventRepository implements IntegrationEventRepos
   }
 }
 
+export class PostgresLeaderLeaseRepository implements LeaderLeaseRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async acquire(resourceName: string, ownerId: string, at: Date, leaseDurationMs: number): Promise<LeaderLeaseRecord | null> {
+    const result = await this.database.query<LeaderLeaseRow>(`
+      INSERT INTO fleet_leader_leases (resource_name, owner_id, fencing_token, acquired_at, renewed_at, expires_at)
+      VALUES ($1,$2,1,$3,$3,$4)
+      ON CONFLICT (resource_name) DO UPDATE SET
+        owner_id=EXCLUDED.owner_id,
+        fencing_token=CASE
+          WHEN fleet_leader_leases.owner_id=EXCLUDED.owner_id AND fleet_leader_leases.expires_at > $3
+            THEN fleet_leader_leases.fencing_token
+          ELSE fleet_leader_leases.fencing_token+1
+        END,
+        acquired_at=CASE
+          WHEN fleet_leader_leases.owner_id=EXCLUDED.owner_id AND fleet_leader_leases.expires_at > $3
+            THEN fleet_leader_leases.acquired_at
+          ELSE $3
+        END,
+        renewed_at=$3,
+        expires_at=$4
+      WHERE fleet_leader_leases.owner_id=EXCLUDED.owner_id OR fleet_leader_leases.expires_at <= $3
+      RETURNING *
+    `, [resourceName, ownerId, at, new Date(at.getTime() + leaseDurationMs)]);
+    return result.rows[0] ? leaderLeaseFromRow(result.rows[0]) : null;
+  }
+
+  async get(resourceName: string): Promise<LeaderLeaseRecord | null> {
+    const result = await this.database.query<LeaderLeaseRow>("SELECT * FROM fleet_leader_leases WHERE resource_name=$1", [resourceName]);
+    return result.rows[0] ? leaderLeaseFromRow(result.rows[0]) : null;
+  }
+
+  async validateFence(resourceName: string, ownerId: string, fencingToken: number, at: Date): Promise<boolean> {
+    const result = await this.database.query<{ valid: boolean }>(`
+      SELECT EXISTS(SELECT 1 FROM fleet_leader_leases
+        WHERE resource_name=$1 AND owner_id=$2 AND fencing_token=$3 AND expires_at>$4) AS valid
+    `, [resourceName, ownerId, fencingToken, at]);
+    return result.rows[0]?.valid ?? false;
+  }
+
+  async release(resourceName: string, ownerId: string, fencingToken: number, at: Date): Promise<boolean> {
+    const result = await this.database.query(`
+      UPDATE fleet_leader_leases SET expires_at=$4, renewed_at=$4
+      WHERE resource_name=$1 AND owner_id=$2 AND fencing_token=$3
+    `, [resourceName, ownerId, fencingToken, at]);
+    return (result.rowCount ?? 0) === 1;
+  }
+}
+
 export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
   constructor(private readonly database: PostgresDatabase) {}
 
@@ -2013,5 +2073,16 @@ function robotOperatorControlFromRow(row: RobotOperatorControlRow): RobotOperato
     clearedBy: row.cleared_by,
     clearedAt: row.cleared_at ? new Date(row.cleared_at) : null,
     inspectionReference: row.inspection_reference,
+  };
+}
+
+function leaderLeaseFromRow(row: LeaderLeaseRow): LeaderLeaseRecord {
+  return {
+    resourceName: row.resource_name,
+    ownerId: row.owner_id,
+    fencingToken: Number(row.fencing_token),
+    acquiredAt: new Date(row.acquired_at),
+    renewedAt: new Date(row.renewed_at),
+    expiresAt: new Date(row.expires_at),
   };
 }

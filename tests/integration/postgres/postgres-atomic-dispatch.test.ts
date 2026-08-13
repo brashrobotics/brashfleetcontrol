@@ -778,6 +778,36 @@ async function closeStalePostgresTestWork(persistence: PostgresPersistence): Pro
   `);
 }
 
+test("PostgreSQL leader election permits one owner and fences an expired leader", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const resource = `site:plant-a:ha-test:${suffix}`;
+  const firstPersistence = createPersistence(databaseUrl!);
+  const secondPersistence = createPersistence(databaseUrl!);
+  await firstPersistence.migrate();
+  const now = new Date();
+
+  try {
+    const attempts = await Promise.all([
+      firstPersistence.leaderLeases.acquire(resource, "instance-a", now, 1_000),
+      secondPersistence.leaderLeases.acquire(resource, "instance-b", now, 1_000),
+    ]);
+    assert.equal(attempts.filter(Boolean).length, 1);
+    const leader = attempts[0] ? { persistence: firstPersistence, owner: "instance-a", lease: attempts[0] } : { persistence: secondPersistence, owner: "instance-b", lease: attempts[1]! };
+    const follower = attempts[0] ? { persistence: secondPersistence, owner: "instance-b" } : { persistence: firstPersistence, owner: "instance-a" };
+    assert.equal(leader.lease.fencingToken, 1);
+    assert.equal(await leader.persistence.leaderLeases.validateFence(resource, leader.owner, 1, new Date(now.getTime() + 500)), true);
+
+    const takeover = await follower.persistence.leaderLeases.acquire(resource, follower.owner, new Date(now.getTime() + 1_001), 1_000);
+    assert.equal(takeover?.fencingToken, 2);
+    assert.equal(await leader.persistence.leaderLeases.validateFence(resource, leader.owner, 1, new Date(now.getTime() + 1_001)), false);
+  } finally {
+    await firstPersistence.close();
+    await secondPersistence.close();
+  }
+});
+
 function createPersistence(connectionString: string, schema = "public"): PostgresPersistence {
   const config = loadPersistenceConfig({
     FLEET_PERSISTENCE: "postgres",

@@ -55,6 +55,15 @@ export class PostgresDatabase {
     });
   }
 
+  async ping(): Promise<boolean> {
+    try {
+      await this.query("SELECT 1");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async withDedicatedClient<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {

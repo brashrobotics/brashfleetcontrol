@@ -452,3 +452,19 @@ export interface AuditRepository {
 export interface TransactionManager {
   runExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
+
+export interface LeaderLeaseRecord {
+  resourceName: string;
+  ownerId: string;
+  fencingToken: number;
+  acquiredAt: Date;
+  renewedAt: Date;
+  expiresAt: Date;
+}
+
+export interface LeaderLeaseRepository {
+  acquire(resourceName: string, ownerId: string, at: Date, leaseDurationMs: number): Promise<LeaderLeaseRecord | null>;
+  get(resourceName: string): Promise<LeaderLeaseRecord | null>;
+  validateFence(resourceName: string, ownerId: string, fencingToken: number, at: Date): Promise<boolean>;
+  release(resourceName: string, ownerId: string, fencingToken: number, at: Date): Promise<boolean>;
+}

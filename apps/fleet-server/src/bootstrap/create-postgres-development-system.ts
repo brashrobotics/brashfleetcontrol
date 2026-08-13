@@ -1,5 +1,6 @@
 import {
   FleetCore,
+  FleetLeaderElection,
   RandomIdGenerator,
   SystemClock,
   WeightedDispatchPolicy,
@@ -28,6 +29,14 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig, si
       }
     }
     const adapter = createDevelopmentAdapter();
+    const clock = new SystemClock();
+    const instanceId = `fleet-server-${randomUUID()}`;
+    const leaderLeaseMs = Number(process.env.FLEET_LEADER_LEASE_MS ?? 15_000);
+    const leaderElection = new FleetLeaderElection(persistence.leaderLeases, clock, {
+      resourceName: `site:${siteId}:control-plane`,
+      ownerId: instanceId,
+      leaseDurationMs: Number.isInteger(leaderLeaseMs) && leaderLeaseMs >= 1_000 ? leaderLeaseMs : 15_000,
+    });
     const core = new FleetCore({
       siteId,
       alarms: persistence.alarms,
@@ -47,25 +56,28 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig, si
       workOrders: persistence.workOrders,
       capabilityProfiles: persistence.capabilityProfiles,
       transactions: persistence.transactions,
-      clock: new SystemClock(),
+      clock,
       ids: new RandomIdGenerator(),
       adapter,
       dispatchPolicy: new WeightedDispatchPolicy(),
       trafficScheduler: new TrafficScheduler(),
       workOrderAllocationPolicy: new WorkOrderAllocationPolicy(),
       livenessPolicy: new RobotLivenessPolicy(),
-      instanceId: `fleet-server-${randomUUID()}`,
+      instanceId,
     });
 
     const metrics = new MetricsRegistry();
     const logger = new StructuredLogger("brash-fleet-core");
-    const api = new SecuredFleetApi(new FleetApi(core), {
+    const api = new SecuredFleetApi(new FleetApi(core, async () => ({
+      persistenceReady: await persistence.database.ping(),
+      leadership: leaderElection.status,
+    })), {
       siteId,
       identities: createDevelopmentIdentityProvider(),
       audit: persistence.audit,
       observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
     });
-    return { core, api, adapter, persistence, integrationEvents: persistence.integrationEvents, metrics, logger };
+    return { core, api, adapter, persistence, integrationEvents: persistence.integrationEvents, leaderElection, metrics, logger };
   } catch (error) {
     await persistence.close();
     throw error;

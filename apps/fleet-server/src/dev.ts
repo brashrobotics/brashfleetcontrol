@@ -10,6 +10,7 @@ import { MissionDispatchWorker } from "./workers/mission-dispatch-worker.js";
 import { WorkflowWorker } from "./workers/workflow-worker.js";
 import { WorkOrderWorker } from "./workers/work-order-worker.js";
 import { IntegrationOutboxWorker } from "./workers/integration-outbox-worker.js";
+import { LeaderElectionWorker } from "./workers/leader-election-worker.js";
 import { HttpIntegrationEventPublisher } from "./modules/integrations/http-integration-publisher.js";
 
 const persistenceConfig = loadPersistenceConfig();
@@ -25,6 +26,12 @@ const workerError = (worker: string) => (error: unknown): void => {
   logger.error("worker.run.failed", { worker, error });
 };
 const outboxWorker = new OutboxRetryWorker(core, { onError: workerError("command_outbox") });
+const leaderElectionWorker = new LeaderElectionWorker(system.leaderElection, {
+  intervalMs: Number(process.env.FLEET_LEADER_POLL_MS ?? 5_000),
+  onError: workerError("leader_election"),
+});
+await leaderElectionWorker.runOnce();
+leaderElectionWorker.start();
 outboxWorker.start();
 const recoveryWorker = new FleetRecoveryWorker(core, { onError: workerError("fleet_recovery") });
 recoveryWorker.start();
@@ -71,6 +78,7 @@ const server = createServer(async (incoming, outgoing) => {
 });
 
 async function shutdown(): Promise<void> {
+  await leaderElectionWorker.stop();
   outboxWorker.stop();
   recoveryWorker.stop();
   dispatchWorker.stop();

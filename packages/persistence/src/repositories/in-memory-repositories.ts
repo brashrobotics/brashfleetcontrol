@@ -15,6 +15,8 @@ import type {
   IntegrationEventFilter,
   IntegrationEventRecord,
   IntegrationEventRepository,
+  LeaderLeaseRecord,
+  LeaderLeaseRepository,
   MissionEventRepository,
   MissionQueueClaimOptions,
   MissionQueueEntry,
@@ -865,6 +867,44 @@ export class InMemoryIntegrationEventRepository implements IntegrationEventRepos
   }
 }
 
+export class InMemoryLeaderLeaseRepository implements LeaderLeaseRepository {
+  private readonly leases = new Map<string, LeaderLeaseRecord>();
+
+  async acquire(resourceName: string, ownerId: string, at: Date, leaseDurationMs: number): Promise<LeaderLeaseRecord | null> {
+    const current = this.leases.get(resourceName);
+    if (current && current.ownerId !== ownerId && current.expiresAt.getTime() > at.getTime()) return null;
+    const ownerChanged = current?.ownerId !== ownerId || (current?.expiresAt.getTime() ?? 0) <= at.getTime();
+    const lease: LeaderLeaseRecord = {
+      resourceName,
+      ownerId,
+      fencingToken: current ? current.fencingToken + (ownerChanged ? 1 : 0) : 1,
+      acquiredAt: ownerChanged ? new Date(at) : new Date(current!.acquiredAt),
+      renewedAt: new Date(at),
+      expiresAt: new Date(at.getTime() + leaseDurationMs),
+    };
+    this.leases.set(resourceName, lease);
+    return cloneLeaderLease(lease);
+  }
+
+  async get(resourceName: string): Promise<LeaderLeaseRecord | null> {
+    const lease = this.leases.get(resourceName);
+    return lease ? cloneLeaderLease(lease) : null;
+  }
+
+  async validateFence(resourceName: string, ownerId: string, fencingToken: number, at: Date): Promise<boolean> {
+    const lease = this.leases.get(resourceName);
+    return Boolean(lease && lease.ownerId === ownerId && lease.fencingToken === fencingToken && lease.expiresAt.getTime() > at.getTime());
+  }
+
+  async release(resourceName: string, ownerId: string, fencingToken: number, at: Date): Promise<boolean> {
+    const lease = this.leases.get(resourceName);
+    if (!lease || lease.ownerId !== ownerId || lease.fencingToken !== fencingToken) return false;
+    lease.expiresAt = new Date(at);
+    lease.renewedAt = new Date(at);
+    return true;
+  }
+}
+
 function cloneMapVersion(record: MapVersionRecord): MapVersionRecord {
   return {
     ...record,
@@ -1103,6 +1143,10 @@ function cloneIntegrationEvent(record: IntegrationEventRecord): IntegrationEvent
     deliveredAt: record.deliveredAt ? new Date(record.deliveredAt) : null,
     leaseExpiresAt: record.leaseExpiresAt ? new Date(record.leaseExpiresAt) : null,
   };
+}
+
+function cloneLeaderLease(record: LeaderLeaseRecord): LeaderLeaseRecord {
+  return { ...record, acquiredAt: new Date(record.acquiredAt), renewedAt: new Date(record.renewedAt), expiresAt: new Date(record.expiresAt) };
 }
 
 function cloneTrafficReservation(reservation: TrafficReservationSnapshot): TrafficReservationSnapshot {

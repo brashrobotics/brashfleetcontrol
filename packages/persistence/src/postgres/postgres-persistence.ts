@@ -9,6 +9,7 @@ import {
   PostgresCapabilityProfileRepository,
   PostgresInfrastructureResourceRepository,
   PostgresIntegrationEventRepository,
+  PostgresLeaderLeaseRepository,
   PostgresMapTopologyRepository,
   PostgresMissionQueueRepository,
   PostgresMissionEventRepository,
@@ -36,6 +37,7 @@ export class PostgresPersistence {
   readonly maps: PostgresMapTopologyRepository;
   readonly infrastructureResources: PostgresInfrastructureResourceRepository;
   readonly integrationEvents: PostgresIntegrationEventRepository;
+  readonly leaderLeases: PostgresLeaderLeaseRepository;
   readonly traffic: PostgresTrafficPlanRepository;
   readonly trafficRestrictions: PostgresTrafficRestrictionRepository;
   readonly workflows: PostgresWorkflowRepository;
@@ -59,6 +61,7 @@ export class PostgresPersistence {
     this.maps = new PostgresMapTopologyRepository(this.database);
     this.infrastructureResources = new PostgresInfrastructureResourceRepository(this.database);
     this.integrationEvents = new PostgresIntegrationEventRepository(this.database);
+    this.leaderLeases = new PostgresLeaderLeaseRepository(this.database);
     this.traffic = new PostgresTrafficPlanRepository(this.database);
     this.trafficRestrictions = new PostgresTrafficRestrictionRepository(this.database);
     this.workflows = new PostgresWorkflowRepository(this.database);

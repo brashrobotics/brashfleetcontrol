@@ -1,5 +1,6 @@
 import {
   FleetCore,
+  FleetLeaderElection,
   type InfrastructureResourceRecord,
   RandomIdGenerator,
   SystemClock,
@@ -19,6 +20,7 @@ import {
   InMemoryCapabilityProfileRepository,
   InMemoryInfrastructureResourceRepository,
   InMemoryIntegrationEventRepository,
+  InMemoryLeaderLeaseRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionQueueRepository,
   InMemoryMissionRepository,
@@ -86,6 +88,13 @@ export function createDevelopmentSystem(siteId = "plant-a") {
   const infrastructureResources = new InMemoryInfrastructureResourceRepository(defaultInfrastructureResources());
 
   const integrationEvents = new InMemoryIntegrationEventRepository();
+  const clock = new SystemClock();
+  const leaderLeases = new InMemoryLeaderLeaseRepository();
+  const leaderElection = new FleetLeaderElection(leaderLeases, clock, {
+    resourceName: `site:${siteId}:control-plane`,
+    ownerId: "fleet-server-memory",
+    leaseDurationMs: leaderLeaseDuration(),
+  });
   const core = new FleetCore({
     siteId,
     alarms: new InMemoryAlarmRepository(),
@@ -105,7 +114,7 @@ export function createDevelopmentSystem(siteId = "plant-a") {
     workOrders: new InMemoryWorkOrderRepository(),
     capabilityProfiles: new InMemoryCapabilityProfileRepository(),
     transactions: new InMemoryTransactionManager(),
-    clock: new SystemClock(),
+    clock,
     ids: new RandomIdGenerator(),
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
@@ -118,13 +127,21 @@ export function createDevelopmentSystem(siteId = "plant-a") {
   const audit = new InMemoryAuditRepository();
   const metrics = new MetricsRegistry();
   const logger = new StructuredLogger("brash-fleet-core");
-  const api = new SecuredFleetApi(new FleetApi(core), {
+  const api = new SecuredFleetApi(new FleetApi(core, async () => ({
+    persistenceReady: true,
+    leadership: leaderElection.status,
+  })), {
     siteId,
     identities: createDevelopmentIdentityProvider(),
     audit,
     observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },
   });
-  return { core, api, adapter, audit, integrationEvents, metrics, logger };
+  return { core, api, adapter, audit, integrationEvents, leaderElection, leaderLeases, metrics, logger };
+}
+
+function leaderLeaseDuration(): number {
+  const value = Number(process.env.FLEET_LEADER_LEASE_MS ?? 15_000);
+  return Number.isInteger(value) && value >= 1_000 ? value : 15_000;
 }
 
 export function defaultInfrastructureResources(now = new Date()): InfrastructureResourceRecord[] {

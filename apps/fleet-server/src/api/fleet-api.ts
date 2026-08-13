@@ -15,7 +15,7 @@ import {
   parseUpdateInfrastructureResourceStatusRequest,
 } from "@brash/contracts";
 import { DomainError } from "@brash/domain";
-import type { FleetCore } from "@brash/application";
+import type { FleetCore, FleetLeadershipStatus } from "@brash/application";
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
@@ -28,7 +28,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 export class FleetApi {
-  constructor(private readonly core: FleetCore) {}
+  constructor(
+    private readonly core: FleetCore,
+    private readonly readiness?: () => Promise<{ persistenceReady: boolean; leadership: FleetLeadershipStatus }>,
+  ) {}
 
   async fetch(request: Request): Promise<Response> {
     try {
@@ -43,6 +46,18 @@ export class FleetApi {
           robots: snapshot.robots.length,
           missions: snapshot.missions.length,
         });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/ready") {
+        const readiness = this.readiness
+          ? await this.readiness()
+          : { persistenceReady: true, leadership: null };
+        return json({
+          ready: readiness.persistenceReady,
+          service: "brash-fleet-core",
+          siteId: this.core.siteId,
+          ...readiness,
+        }, readiness.persistenceReady ? 200 : 503);
       }
 
       if (request.method === "GET" && url.pathname === "/api/v1/fleet/snapshot") {

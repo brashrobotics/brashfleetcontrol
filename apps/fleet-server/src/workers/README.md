@@ -56,3 +56,8 @@ instances.
 configured. It claims up to 25 enterprise events, publishes them with stable
 idempotency headers, applies bounded exponential backoff with deterministic
 jitter, and moves poison events to `DEAD_LETTER` after 12 attempts.
+
+`LeaderElectionWorker` renews a site-scoped control-plane lease. PostgreSQL
+takeovers receive a monotonically increasing fencing token, so a stale process
+cannot validate or release its successor's lease. Followers continue serving
+the API and the distributed row-leased workers.

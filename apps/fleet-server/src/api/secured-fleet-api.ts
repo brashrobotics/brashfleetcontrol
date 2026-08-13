@@ -58,7 +58,7 @@ export class SecuredFleetApi {
       return withCorrelation(response, correlationId);
     };
     try {
-    if (request.method === "OPTIONS" || (request.method === "GET" && url.pathname === "/api/v1/health")) {
+    if (request.method === "OPTIONS" || (request.method === "GET" && ["/api/v1/health", "/api/v1/ready"].includes(url.pathname))) {
       return finish(await this.inner.fetch(request));
     }
 

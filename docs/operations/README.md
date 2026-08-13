@@ -11,6 +11,7 @@ Current runbooks:
 - [Observability and incident response](./OBSERVABILITY_RUNBOOK.md)
 - [Resilience testing](./RESILIENCE_TESTING.md)
 - [Site isolation and provisioning](./SITE_ISOLATION.md)
+- [High availability and disaster recovery](./HA_DISASTER_RECOVERY.md)
 
 ## Responsibilities
 
