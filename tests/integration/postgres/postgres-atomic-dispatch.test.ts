@@ -834,6 +834,46 @@ test("PostgreSQL persists workflow template lifecycle and immutable revisions", 
   }
 });
 
+test("PostgreSQL atomically swaps an active route and retains revision history", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-REPLAN-${suffix}`;
+  const capability = `replan-${suffix}`;
+  const clock = new ManualClock();
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  await releaseStalePostgresTestHolds(persistence);
+  await persistence.maps.save(createDefaultPlantTopology());
+  const core = createCore(persistence, `REPLAN-${suffix}`, robotId, capability, clock);
+  let missionId: string | null = null;
+  try {
+    await core.start();
+    const mission = await core.createMission(transportMissionFixture({
+      externalReference: `PG-REPLAN-${suffix}`, requiredCapabilities: [capability],
+    }));
+    missionId = mission.missionId;
+    const dispatch = await core.dispatchMission(mission.missionId);
+    const blocked = dispatch.route!.segments.find((segment) => ["E-CENTER-NORTH", "E-NORTH-02"].includes(segment.edgeId))!;
+    const replanned = await core.replanMissionRoute(mission.missionId, {
+      reason: "PostgreSQL route revision test", operatorId: "pg-traffic", excludedResourceIds: [`edge:${blocked.edgeId}`],
+    });
+    assert.equal(replanned.revision.revision, 2);
+    const rows = await persistence.database.query<{ revision: number; status: string; route_id: string; supersedes_route_id: string | null }>(`
+      SELECT revision, status, route_id, supersedes_route_id FROM traffic_route_plans
+      WHERE mission_id=$1 ORDER BY revision
+    `, [mission.missionId]);
+    assert.deepEqual(rows.rows.map((row) => [row.revision, row.status]), [[1, "RELEASED"], [2, "ACTIVE"]]);
+    assert.equal(rows.rows[1].supersedes_route_id, rows.rows[0].route_id);
+    const active = await persistence.traffic.listActiveReservations("plant-a@1", clock.now());
+    assert.equal(active.some((reservation) => reservation.routeId === rows.rows[0].route_id), false);
+  } finally {
+    if (missionId) await persistence.traffic.releaseByMission(missionId, clock.now());
+    await core.stop();
+    await persistence.close();
+  }
+});
+
 function createPersistence(connectionString: string, schema = "public"): PostgresPersistence {
   const config = loadPersistenceConfig({
     FLEET_PERSISTENCE: "postgres",

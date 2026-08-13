@@ -32,6 +32,7 @@ import type {
   RobotOperatorControlRecord,
   RaiseAlarmInput,
   TrafficPlanRepository,
+  TrafficRouteRevisionRecord,
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
   WorkflowClaimOptions,
@@ -368,6 +369,10 @@ interface TrafficPlanRow {
   last_renewed_at: Date;
   lease_expires_at: Date;
   released_at: Date | null;
+  revision: number;
+  supersedes_route_id: string | null;
+  replan_reason: string;
+  replanned_by: string;
 }
 
 interface TrafficReservationRow {
@@ -404,7 +409,8 @@ const TRAFFIC_PLAN_COLUMNS = `
   origin_node_id, pickup_node_id, dropoff_node_id,
   requested_start_at, scheduled_start_at, expected_arrival_at,
   total_distance_meters, total_wait_seconds, segments, planned_at,
-  last_renewed_at, lease_expires_at, released_at
+  last_renewed_at, lease_expires_at, released_at,
+  revision, supersedes_route_id, replan_reason, replanned_by
 `;
 
 const TRAFFIC_RESERVATION_COLUMNS = `
@@ -1547,6 +1553,8 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
       SELECT ${TRAFFIC_PLAN_COLUMNS}
       FROM traffic_route_plans
       WHERE mission_id = $1
+      ORDER BY (status IN ('ACTIVE', 'SAFETY_HOLD')) DESC, revision DESC
+      LIMIT 1
     `, [missionId]);
     return result.rows[0] ? this.hydratePlan(result.rows[0]) : null;
   }
@@ -1579,6 +1587,16 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
   }
 
   async save(plan: TrafficPlanSnapshot): Promise<void> {
+    await this.writePlan(plan, 1, null, "Initial route", "system");
+  }
+
+  private async writePlan(
+    plan: TrafficPlanSnapshot,
+    revision: number,
+    supersedesRouteId: string | null,
+    reason: string,
+    triggeredBy: string,
+  ): Promise<void> {
     await this.database.query("DELETE FROM traffic_reservations WHERE route_id = $1", [plan.routeId]);
     await this.database.query(`
       INSERT INTO traffic_route_plans (
@@ -1586,10 +1604,11 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
         origin_node_id, pickup_node_id, dropoff_node_id,
         requested_start_at, scheduled_start_at, expected_arrival_at,
         total_distance_meters, total_wait_seconds, segments,
-        planned_at, last_renewed_at, lease_expires_at, released_at, updated_at
+        planned_at, last_renewed_at, lease_expires_at, released_at, updated_at,
+        revision, supersedes_route_id, replan_reason, replanned_by
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        $12, $13, $14::jsonb, $15, $16, $17, $18, $15
+        $12, $13, $14::jsonb, $15, $16, $17, $18, $15, $19, $20, $21, $22
       )
       ON CONFLICT (route_id) DO UPDATE SET
         robot_id = EXCLUDED.robot_id,
@@ -1628,6 +1647,10 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
       plan.lastRenewedAt,
       plan.leaseExpiresAt,
       plan.releasedAt,
+      revision,
+      supersedesRouteId,
+      reason,
+      triggeredBy,
     ]);
 
     for (const reservation of plan.reservations) {
@@ -1652,6 +1675,49 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
         reservation.releasedAt,
       ]);
     }
+  }
+
+  async replaceActive(plan: TrafficPlanSnapshot, reason: string, triggeredBy: string, at: Date): Promise<TrafficRouteRevisionRecord | null> {
+    return this.database.transaction(async () => {
+      const currentResult = await this.database.query<TrafficPlanRow>(`
+        SELECT ${TRAFFIC_PLAN_COLUMNS} FROM traffic_route_plans
+        WHERE mission_id=$1 AND status='ACTIVE' FOR UPDATE
+      `, [plan.missionId]);
+      const current = currentResult.rows[0];
+      if (!current) return null;
+      await this.database.query(`
+        UPDATE traffic_reservations SET state='RELEASED', released_at=$2
+        WHERE route_id=$1 AND state='ACTIVE'
+      `, [current.route_id, at]);
+      await this.database.query(`
+        UPDATE traffic_route_plans SET status='RELEASED', released_at=$2, updated_at=$2
+        WHERE route_id=$1 AND status='ACTIVE'
+      `, [current.route_id, at]);
+      const revision = current.revision + 1;
+      await this.writePlan(plan, revision, current.route_id, reason, triggeredBy);
+      return {
+        missionId: plan.missionId, routeId: plan.routeId, revision,
+        supersedesRouteId: current.route_id, reason, triggeredBy,
+        createdAt: new Date(at), status: plan.status,
+      };
+    });
+  }
+
+  async listRevisions(missionId: string): Promise<TrafficRouteRevisionRecord[]> {
+    const result = await this.database.query<TrafficPlanRow>(`
+      SELECT ${TRAFFIC_PLAN_COLUMNS} FROM traffic_route_plans
+      WHERE mission_id=$1 ORDER BY revision
+    `, [missionId]);
+    return result.rows.map((row) => ({
+      missionId: row.mission_id,
+      routeId: row.route_id,
+      revision: row.revision,
+      supersedesRouteId: row.supersedes_route_id,
+      reason: row.replan_reason,
+      triggeredBy: row.replanned_by,
+      createdAt: new Date(row.planned_at),
+      status: row.status,
+    }));
   }
 
   async renewLeaseByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {

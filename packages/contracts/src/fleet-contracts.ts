@@ -665,6 +665,28 @@ export interface TrafficPlanView {
   releasedAt: string | null;
 }
 
+export interface ReplanMissionRouteRequest {
+  reason: string;
+  operatorId: string;
+  excludedResourceIds?: string[];
+}
+
+export interface TrafficRouteRevisionView {
+  missionId: string;
+  routeId: string;
+  revision: number;
+  supersedesRouteId: string | null;
+  reason: string;
+  triggeredBy: string;
+  createdAt: string;
+  status: TrafficPlanStatus;
+}
+
+export interface RouteReplanResult {
+  route: TrafficPlanView;
+  revision: TrafficRouteRevisionView;
+}
+
 export interface TrafficScheduleView {
   mapId: string;
   updatedAt: string;

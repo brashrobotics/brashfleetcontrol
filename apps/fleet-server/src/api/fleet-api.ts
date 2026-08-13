@@ -13,6 +13,7 @@ import {
   parseCreateWorkOrderRequest,
   parseQuarantineRobotRequest,
   parseReassignRecoveryMissionRequest,
+  parseReplanMissionRouteRequest,
   parseReleaseRobotQuarantineRequest,
   parseUpdateInfrastructureResourceStatusRequest,
 } from "@brash/contracts";
@@ -301,6 +302,19 @@ export class FleetApi {
       const missionRouteMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/route$/);
       if (request.method === "GET" && missionRouteMatch) {
         return json({ route: await this.core.getMissionRoute(decodeURIComponent(missionRouteMatch[1])) });
+      }
+
+      const missionRouteRevisionsMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/route-revisions$/);
+      if (request.method === "GET" && missionRouteRevisionsMatch) {
+        return json({ revisions: await this.core.listMissionRouteRevisions(decodeURIComponent(missionRouteRevisionsMatch[1])) });
+      }
+
+      const missionRouteReplanMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/route\/replan$/);
+      if (request.method === "POST" && missionRouteReplanMatch) {
+        return json({ replan: await this.core.replanMissionRoute(
+          decodeURIComponent(missionRouteReplanMatch[1]),
+          parseReplanMissionRouteRequest(await request.json()),
+        ) });
       }
 
       const missionMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)$/);

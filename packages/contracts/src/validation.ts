@@ -21,6 +21,7 @@ import type {
   QuarantineRobotRequest,
   ReleaseRobotQuarantineRequest,
   ReassignRecoveryMissionRequest,
+  ReplanMissionRouteRequest,
   WorkflowStepDefinition,
   WorkOrderFollowUpAction,
 } from "./fleet-contracts.js";
@@ -415,6 +416,21 @@ export function parseInstantiateWorkflowTemplateRequest(value: unknown): Instant
   }
   if (issues.length > 0) throw new ContractValidationError(issues);
   return { ...(name ? { name } : {}), ...(externalReference ? { externalReference } : {}), parameters };
+}
+
+export function parseReplanMissionRouteRequest(value: unknown): ReplanMissionRouteRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const reason = nonEmptyString(value.reason, "reason", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  const excludedResourceIds = value.excludedResourceIds === undefined ? undefined : Array.isArray(value.excludedResourceIds)
+    ? [...new Set(value.excludedResourceIds.map((entry, index) => nonEmptyString(entry, `excludedResourceIds[${index}]`, issues)))]
+    : (issues.push("excludedResourceIds must be an array."), undefined);
+  if (excludedResourceIds?.some((resource) => !/^(edge|node):[A-Za-z0-9._:-]+$/.test(resource))) {
+    issues.push("excludedResourceIds entries must use edge: or node: identifiers.");
+  }
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { reason, operatorId, ...(excludedResourceIds ? { excludedResourceIds } : {}) };
 }
 
 function parseWorkflowStep(value: unknown, index: number, issues: string[]): WorkflowStepDefinition {

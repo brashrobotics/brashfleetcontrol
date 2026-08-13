@@ -413,10 +413,23 @@ export interface TrafficPlanRepository {
     excludeMissionId?: string,
   ): Promise<TrafficReservationSnapshot[]>;
   save(plan: TrafficPlanSnapshot): Promise<void>;
+  replaceActive(plan: TrafficPlanSnapshot, reason: string, triggeredBy: string, at: Date): Promise<TrafficRouteRevisionRecord | null>;
+  listRevisions(missionId: string): Promise<TrafficRouteRevisionRecord[]>;
   renewLeaseByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null>;
   placeSafetyHoldByMission(missionId: string, at: Date): Promise<TrafficPlanSnapshot | null>;
   acknowledgeSafetyHoldByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null>;
   releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null>;
+}
+
+export interface TrafficRouteRevisionRecord {
+  missionId: string;
+  routeId: string;
+  revision: number;
+  supersedesRouteId: string | null;
+  reason: string;
+  triggeredBy: string;
+  createdAt: Date;
+  status: TrafficPlanSnapshot["status"];
 }
 
 export interface AssignmentDecisionRepository {

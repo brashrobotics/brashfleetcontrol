@@ -31,12 +31,15 @@ import {
   type MissionView,
   type QuarantineRobotRequest,
   type ReassignRecoveryMissionRequest,
+  type ReplanMissionRouteRequest,
   type ReleaseRobotQuarantineRequest,
   type RobotOperatorControlView,
+  type RouteReplanResult,
   type OperationalAnalyticsView,
   type RobotAdapterEvent,
   type TrafficPlanView,
   type TrafficRestrictionView,
+  type TrafficRouteRevisionView,
   type TrafficScheduleView,
   type WorkflowView,
   type WorkflowTemplateView,
@@ -84,6 +87,7 @@ import type {
   TrafficPlanRepository,
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
+  TrafficRouteRevisionRecord,
   TransactionManager,
   WorkflowRecord,
   WorkflowRepository,
@@ -1105,6 +1109,61 @@ export class FleetCore {
     return plan ? trafficPlanToView(plan) : null;
   }
 
+  async listMissionRouteRevisions(missionId: string): Promise<TrafficRouteRevisionView[]> {
+    await this.requireMission(missionId);
+    return (await this.dependencies.traffic.listRevisions(missionId)).map((revision) => this.trafficRouteRevisionToView(revision));
+  }
+
+  async replanMissionRoute(missionId: string, input: ReplanMissionRouteRequest): Promise<RouteReplanResult> {
+    this.assertStarted();
+    return this.dependencies.transactions.runExclusive(async () => {
+      const mission = await this.requireMission(missionId, true);
+      if (!mission.assignedRobotId || !mission.commandId || !["ASSIGNED", "DISPATCHED"].includes(mission.state)) {
+        throw new DomainError("MISSION_ROUTE_NOT_REPLANNABLE", `Mission ${missionId} must be assigned but not executing.`);
+      }
+      const current = await this.dependencies.traffic.getByMission(missionId);
+      if (!current || current.status !== "ACTIVE") throw new DomainError("MISSION_ROUTE_NOT_ACTIVE", `Mission ${missionId} has no active route.`);
+      const robot = await this.requireRobot(mission.assignedRobotId, true);
+      const topology = await this.requirePublishedMap(current.mapId, true);
+      const now = this.dependencies.clock.now();
+      const existingReservations = await this.dependencies.traffic.listActiveReservations(current.mapId, now, missionId);
+      const controls = await this.getTrafficControls(current.mapId);
+      const excludedResourceIds = [...new Set([...controls.excludedResourceIds, ...(input.excludedResourceIds ?? [])])];
+      const route = this.dependencies.trafficScheduler.schedule({
+        routeId: this.dependencies.ids.next("route"),
+        missionId,
+        robotId: robot.robotId,
+        topology,
+        origin: robot.pose,
+        pickup: mission.pickup,
+        dropoff: mission.dropoff,
+        requestedStartAt: new Date(now.getTime() + 5_000),
+        plannedAt: now,
+        existingReservations,
+        excludedResourceIds,
+        infrastructureBindings: controls.infrastructureBindings,
+      });
+      const revision = await this.dependencies.traffic.replaceActive(route, input.reason, input.operatorId, now);
+      if (!revision) throw new DomainError("MISSION_ROUTE_REPLAN_RACE", `Mission ${missionId}'s route changed before replanning could commit.`);
+      if (mission.state === "ASSIGNED") {
+        await this.dependencies.commands.updatePending(this.buildCommand(mission, robot.robotId, mission.commandId, now, route), now);
+      }
+      await this.appendMissionEvent(mission, "ROUTE_RESERVED", `Traffic route replanned: ${input.reason}`, now, {
+        routeId: route.routeId,
+        previousRouteId: current.routeId,
+        revision: revision.revision,
+        triggeredBy: input.operatorId,
+        excludedResourceIds,
+        segments: route.segments.length,
+        distanceMeters: route.totalDistanceMeters,
+        scheduledStartAt: route.scheduledStartAt.toISOString(),
+        expectedArrivalAt: route.expectedArrivalAt.toISOString(),
+        rescheduled: true,
+      });
+      return { route: trafficPlanToView(route), revision: this.trafficRouteRevisionToView(revision) };
+    });
+  }
+
   async getMapTopology(mapId: string): Promise<MapTopologyView> {
     return topologyToView(await this.requireMapTopology(mapId));
   }
@@ -1273,6 +1332,19 @@ export class FleetCore {
     const impacted = (await this.dependencies.traffic.listByMap(input.mapId))
       .filter((plan) => plan.status === "ACTIVE" && plan.reservations.some((reservation) => reservation.resourceId === input.resourceId));
     for (const plan of impacted) {
+      try {
+        const mission = await this.requireMission(plan.missionId);
+        if (["ASSIGNED", "DISPATCHED"].includes(mission.state)) {
+          await this.replanMissionRoute(plan.missionId, {
+            reason: `Traffic restriction ${restriction.restrictionId}: ${input.reason}`,
+            operatorId: input.operatorId,
+            excludedResourceIds: [input.resourceId],
+          });
+          continue;
+        }
+      } catch {
+        // The alarm below is the fail-safe when no valid replacement can be committed.
+      }
       await this.dependencies.alarms.raise({
         fingerprint: `traffic-restriction:${restriction.restrictionId}:${plan.missionId}`,
         code: "ACTIVE_ROUTE_RESTRICTED", severity: "CRITICAL",
@@ -1949,6 +2021,10 @@ export class FleetCore {
     };
   }
 
+  private trafficRouteRevisionToView(record: TrafficRouteRevisionRecord): TrafficRouteRevisionView {
+    return { ...record, createdAt: record.createdAt.toISOString() };
+  }
+
   private mapVersionToView(record: MapVersionRecord): MapVersionView {
     return {
       mapId: record.topology.mapId,
@@ -2225,10 +2301,8 @@ export class FleetCore {
     excludedResourceIds: string[];
     infrastructureBindings: Array<{ resourceId: string; edgeId: string | null; nodeId: string | null }>;
   }> {
-    const [restrictions, resources] = await Promise.all([
-      this.dependencies.trafficRestrictions.listActive(mapId),
-      this.dependencies.infrastructureResources.listByMap(mapId),
-    ]);
+    const restrictions = await this.dependencies.trafficRestrictions.listActive(mapId);
+    const resources = await this.dependencies.infrastructureResources.listByMap(mapId);
     const transitResources = resources.filter((resource) => resource.reservationPolicy === "TRANSIT_EXCLUSIVE");
     return {
       excludedResourceIds: [

@@ -165,6 +165,7 @@ function authorizationRule(method: string, pathname: string): AuthorizationRule 
   if (/^\/api\/v1\/missions\/[^/]+\/dispatch$/.test(pathname)) return rule("mission:dispatch", "mission.dispatch", "MISSION", segment(pathname, -2), true);
   if (/^\/api\/v1\/missions\/[^/]+\/cancel$/.test(pathname)) return rule("mission:cancel", "mission.cancel", "MISSION", segment(pathname, -2), true);
   if (/^\/api\/v1\/missions\/[^/]+\/reassign-recovery$/.test(pathname)) return rule("recovery:manage", "mission.recovery.reassign", "MISSION", segment(pathname, -2), true);
+  if (/^\/api\/v1\/missions\/[^/]+\/route\/replan$/.test(pathname)) return rule("traffic:manage", "mission.route.replan", "MISSION", segment(pathname, -3), true);
   if (/^\/api\/v1\/robots\/[^/]+\/(quarantine|release-quarantine)$/.test(pathname)) return rule("recovery:manage", "robot.quarantine.manage", "ROBOT", segment(pathname, -2), true);
   if (method === "POST" && pathname === "/api/v1/workflows") return rule("workflow:create", "workflow.create", "WORKFLOW", "new", true);
   if (/^\/api\/v1\/workflow-templates\/[^/]+\/instantiate$/.test(pathname)) return rule("workflow:create", "workflow_template.instantiate", "WORKFLOW_TEMPLATE", segment(pathname, -2), true);

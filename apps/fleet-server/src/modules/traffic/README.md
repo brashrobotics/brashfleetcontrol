@@ -22,7 +22,12 @@ Coordinates planned use of shared factory space and infrastructure resources.
 - Persists operator edge/node closures and excludes them from shortest-path
   calculation for every new dispatch and route refresh.
 - Raises a critical, deduplicated alarm if a new closure intersects an active
-  route, without pretending that an already-issued robot command was revoked.
+  executing route. Assigned or dispatched routes are dynamically replanned when
+  a safe bypass can be committed; otherwise the alarm is the fail-safe result.
+- Atomically releases the old reservation set and inserts a replacement route
+  under PostgreSQL row locking and exclusion constraints. Each replacement has
+  an immutable revision, predecessor, reason, and authenticated operator.
+- Exposes explicit route replanning and revision history under each mission.
 - Exposes closure create/list/clear controls through both `/api/v1` and the
   Fleet Management dashboard.
 - Reserves available door/elevator bindings as `INFRASTRUCTURE` resources in
@@ -37,8 +42,7 @@ current graph model.
 
 ## Next responsibilities
 
-Add priority preemption, rolling-horizon planning, infrastructure reservations,
-and operator recovery controls for active-route closures.
+Add priority preemption and rolling-horizon planning for very large maps.
 
 ## Boundaries
 

@@ -858,6 +858,30 @@ paths:
                     oneOf:
                       - { $ref: "#/components/schemas/TrafficPlan" }
                       - { type: "null" }
+  /api/v1/missions/{missionId}/route/replan:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    post:
+      operationId: replanMissionRoute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplanMissionRouteRequest" }
+      responses:
+        "200":
+          description: Atomically committed replacement route and revision metadata
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/missions/{missionId}/route-revisions:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    get:
+      operationId: listMissionRouteRevisions
+      responses:
+        "200":
+          description: Ordered immutable route revision history
 components:
   securitySchemes:
     bearerAuth:
@@ -1606,6 +1630,30 @@ components:
         lastRenewedAt: { type: string, format: date-time }
         leaseExpiresAt: { type: string, format: date-time }
         releasedAt: { type: [string, "null"], format: date-time }
+    ReplanMissionRouteRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, operatorId]
+      properties:
+        reason: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+        excludedResourceIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, pattern: "^(edge|node):[A-Za-z0-9._:-]+$" }
+    TrafficRouteRevision:
+      type: object
+      additionalProperties: false
+      required: [missionId, routeId, revision, supersedesRouteId, reason, triggeredBy, createdAt, status]
+      properties:
+        missionId: { type: string }
+        routeId: { type: string }
+        revision: { type: integer, minimum: 1 }
+        supersedesRouteId: { type: [string, "null"] }
+        reason: { type: string }
+        triggeredBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE, SAFETY_HOLD, RELEASED] }
     TrafficReservation:
       type: object
       additionalProperties: false

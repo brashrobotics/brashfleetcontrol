@@ -32,6 +32,7 @@ import type {
   RobotOperatorControlRecord,
   RaiseAlarmInput,
   TrafficPlanRepository,
+  TrafficRouteRevisionRecord,
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
   WorkflowClaimOptions,
@@ -1003,9 +1004,12 @@ function familyIdFor(mapId: string): string {
 
 export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
   private readonly plans = new Map<string, TrafficPlanSnapshot>();
+  private readonly revisions = new Map<string, TrafficRouteRevisionRecord>();
 
   async getByMission(missionId: string): Promise<TrafficPlanSnapshot | null> {
-    const plan = [...this.plans.values()].find((candidate) => candidate.missionId === missionId);
+    const plan = [...this.plans.values()].filter((candidate) => candidate.missionId === missionId)
+      .sort((left, right) => Number(right.status !== "RELEASED") - Number(left.status !== "RELEASED")
+        || (this.revisions.get(right.routeId)?.revision ?? 1) - (this.revisions.get(left.routeId)?.revision ?? 1))[0];
     return plan ? cloneTrafficPlan(plan) : null;
   }
 
@@ -1033,10 +1037,40 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
 
   async save(plan: TrafficPlanSnapshot): Promise<void> {
     this.plans.set(plan.routeId, cloneTrafficPlan(plan));
+    if (!this.revisions.has(plan.routeId)) this.revisions.set(plan.routeId, {
+      missionId: plan.missionId, routeId: plan.routeId, revision: 1,
+      supersedesRouteId: null, reason: "Initial route", triggeredBy: "system",
+      createdAt: new Date(plan.plannedAt), status: plan.status,
+    });
+  }
+
+  async replaceActive(plan: TrafficPlanSnapshot, reason: string, triggeredBy: string, at: Date): Promise<TrafficRouteRevisionRecord | null> {
+    const current = [...this.plans.values()].find((candidate) => candidate.missionId === plan.missionId && candidate.status === "ACTIVE");
+    if (!current) return null;
+    const released = cloneTrafficPlan(current);
+    released.status = "RELEASED";
+    released.releasedAt = new Date(at);
+    released.reservations = released.reservations.map((reservation) => ({ ...reservation, state: "RELEASED", releasedAt: new Date(at) }));
+    this.plans.set(released.routeId, released);
+    const previousRevision = this.revisions.get(current.routeId)?.revision ?? 1;
+    const revision: TrafficRouteRevisionRecord = {
+      missionId: plan.missionId, routeId: plan.routeId, revision: previousRevision + 1,
+      supersedesRouteId: current.routeId, reason, triggeredBy, createdAt: new Date(at), status: plan.status,
+    };
+    this.plans.set(plan.routeId, cloneTrafficPlan(plan));
+    const previousMetadata = this.revisions.get(current.routeId);
+    if (previousMetadata) previousMetadata.status = "RELEASED";
+    this.revisions.set(plan.routeId, revision);
+    return cloneTrafficRouteRevision(revision);
+  }
+
+  async listRevisions(missionId: string): Promise<TrafficRouteRevisionRecord[]> {
+    return [...this.revisions.values()].filter((revision) => revision.missionId === missionId)
+      .sort((left, right) => left.revision - right.revision).map(cloneTrafficRouteRevision);
   }
 
   async renewLeaseByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {
-    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    const entry = this.currentEntry(missionId);
     if (!entry) return null;
     const [routeId, plan] = entry;
     if (plan.status !== "ACTIVE") return cloneTrafficPlan(plan);
@@ -1046,7 +1080,7 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
   }
 
   async placeSafetyHoldByMission(missionId: string, at: Date): Promise<TrafficPlanSnapshot | null> {
-    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    const entry = this.currentEntry(missionId);
     if (!entry) return null;
     const [routeId, plan] = entry;
     if (plan.status === "RELEASED") return cloneTrafficPlan(plan);
@@ -1061,11 +1095,13 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
       })),
     };
     this.plans.set(routeId, held);
+    const revision = this.revisions.get(routeId);
+    if (revision) revision.status = "SAFETY_HOLD";
     return cloneTrafficPlan(held);
   }
 
   async acknowledgeSafetyHoldByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {
-    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    const entry = this.currentEntry(missionId);
     if (!entry) return null;
     const [routeId, plan] = entry;
     if (plan.status !== "SAFETY_HOLD") return cloneTrafficPlan(plan);
@@ -1080,7 +1116,7 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
   }
 
   async releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null> {
-    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    const entry = this.currentEntry(missionId);
     if (!entry) return null;
     const [routeId, plan] = entry;
     if (plan.status === "RELEASED") return cloneTrafficPlan(plan);
@@ -1095,7 +1131,15 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
       })),
     };
     this.plans.set(routeId, released);
+    const revision = this.revisions.get(routeId);
+    if (revision) revision.status = "RELEASED";
     return cloneTrafficPlan(released);
+  }
+
+  private currentEntry(missionId: string): [string, TrafficPlanSnapshot] | undefined {
+    return [...this.plans.entries()].filter(([, plan]) => plan.missionId === missionId)
+      .sort((left, right) => Number(right[1].status !== "RELEASED") - Number(left[1].status !== "RELEASED")
+        || (this.revisions.get(right[0])?.revision ?? 1) - (this.revisions.get(left[0])?.revision ?? 1))[0];
   }
 }
 
@@ -1229,4 +1273,8 @@ function cloneTrafficPlan(plan: TrafficPlanSnapshot): TrafficPlanSnapshot {
     leaseExpiresAt: new Date(plan.leaseExpiresAt),
     releasedAt: plan.releasedAt ? new Date(plan.releasedAt) : null,
   };
+}
+
+function cloneTrafficRouteRevision(revision: TrafficRouteRevisionRecord): TrafficRouteRevisionRecord {
+  return { ...revision, createdAt: new Date(revision.createdAt) };
 }
