@@ -18,6 +18,14 @@ Validate mission plans, execute state-machine transitions, handle pause/resume/c
 - Traffic ownership is retained after adapter delivery failure or rejection, preventing another robot from entering uncertain space.
 - Cancellation requests are idempotent and can be retried from the API or operator timeline.
 
+## Operator recovery
+
+A robot quarantine never assumes that an in-flight command stopped. The
+mission enters `RECOVERY_REQUIRED`, command delivery is suspended, and traffic
+resources remain in `SAFETY_HOLD`. Reassignment is permitted only after an
+operator records positive command-clearance evidence. The event timeline
+retains the operator, previous robot/command, evidence, and nominated target.
+
 ## Boundaries
 
 Must not select robots directly or embed vendor command formats.

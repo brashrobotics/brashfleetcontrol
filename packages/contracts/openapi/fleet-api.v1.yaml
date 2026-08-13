@@ -623,6 +623,26 @@ paths:
       responses:
         "200":
           description: Published profile assigned to an available robot
+  /api/v1/robots/{robotId}/quarantine:
+    parameters:
+      - { name: robotId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: quarantineRobot
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/QuarantineRobotRequest" } } }
+      responses:
+        "200": { description: Robot fenced from dispatch and active mission placed in recovery }
+  /api/v1/robots/{robotId}/release-quarantine:
+    parameters:
+      - { name: robotId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: releaseRobotQuarantine
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReleaseRobotQuarantineRequest" } } }
+      responses:
+        "200": { description: Inspected and canonically clear robot returned to service }
   /api/v1/work-orders/{workOrderId}:
     parameters:
       - $ref: "#/components/parameters/WorkOrderId"
@@ -694,6 +714,17 @@ paths:
                   mission: { $ref: "#/components/schemas/Mission" }
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/missions/{missionId}/reassign-recovery:
+    parameters:
+      - $ref: "#/components/parameters/MissionId"
+    post:
+      operationId: reassignRecoveryMission
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReassignRecoveryMissionRequest" } } }
+      responses:
+        "200": { description: Previous owner quarantined and mission safely reassigned }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/v1/missions/{missionId}/dispatch:
     parameters:
       - $ref: "#/components/parameters/MissionId"
@@ -838,7 +869,7 @@ components:
         role: { type: string, enum: [VIEWER, OPERATOR, DISPATCHER, FLEET_ADMIN, INTEGRATION] }
         permissions:
           type: array
-          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, orchestrator:submit, orchestrator:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, capability:manage, integration:read, integration:manage, observability:read, audit:read] }
+          items: { type: string, enum: [fleet:read, mission:create, mission:dispatch, mission:cancel, workflow:create, workflow:cancel, orchestrator:submit, orchestrator:cancel, alarm:acknowledge, traffic:manage, map:manage, resource:manage, capability:manage, recovery:manage, integration:read, integration:manage, observability:read, audit:read] }
         siteIds:
           type: array
           items: { type: string }
@@ -987,6 +1018,42 @@ components:
       properties:
         profileId: { type: string, minLength: 1 }
         operatorId: { type: string, minLength: 1 }
+    QuarantineRobotRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, operatorId]
+      properties:
+        reason: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+    ReleaseRobotQuarantineRequest:
+      type: object
+      additionalProperties: false
+      required: [inspectionReference, operatorId]
+      properties:
+        inspectionReference: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+    ReassignRecoveryMissionRequest:
+      type: object
+      additionalProperties: false
+      required: [commandCleared, clearanceEvidence, operatorId]
+      properties:
+        commandCleared: { const: true }
+        clearanceEvidence: { type: string, minLength: 1 }
+        targetRobotId: { type: string, minLength: 1 }
+        operatorId: { type: string, minLength: 1 }
+    RobotOperatorControl:
+      type: object
+      additionalProperties: false
+      required: [robotId, status, reason, quarantinedBy, quarantinedAt, clearedBy, clearedAt, inspectionReference]
+      properties:
+        robotId: { type: string }
+        status: { type: string, enum: [QUARANTINED, CLEARED] }
+        reason: { type: string }
+        quarantinedBy: { type: string }
+        quarantinedAt: { type: string, format: date-time }
+        clearedBy: { type: [string, "null"] }
+        clearedAt: { type: [string, "null"], format: date-time }
+        inspectionReference: { type: [string, "null"] }
     CreateMissionRequest:
       type: object
       additionalProperties: false
@@ -1493,11 +1560,12 @@ components:
     FleetRecoveryStatus:
       type: object
       additionalProperties: false
-      required: [evaluatedAt, degradedRobots, offlineRobots, recoveryRequiredMissions, safetyHolds, nextLeaseExpiryAt]
+      required: [evaluatedAt, degradedRobots, offlineRobots, quarantinedRobots, recoveryRequiredMissions, safetyHolds, nextLeaseExpiryAt]
       properties:
         evaluatedAt: { type: string, format: date-time }
         degradedRobots: { type: integer, minimum: 0 }
         offlineRobots: { type: integer, minimum: 0 }
+        quarantinedRobots: { type: integer, minimum: 0 }
         recoveryRequiredMissions: { type: integer, minimum: 0 }
         safetyHolds: { type: integer, minimum: 0 }
         nextLeaseExpiryAt: { type: [string, "null"], format: date-time }
@@ -1525,7 +1593,7 @@ components:
         activeMissionId: { type: [string, "null"] }
     Robot:
       type: object
-      required: [robotId, displayName, vendor, model, capabilities, state]
+      required: [robotId, displayName, vendor, model, capabilities, state, operatorControl]
       properties:
         robotId: { type: string }
         displayName: { type: string }
@@ -1550,6 +1618,10 @@ components:
             supportsCancellation: { type: boolean }
             adapterProtocolVersion: { type: string }
         state: { $ref: "#/components/schemas/RobotState" }
+        operatorControl:
+          oneOf:
+            - $ref: "#/components/schemas/RobotOperatorControl"
+            - type: "null"
     FleetSnapshot:
       type: object
       required: [schemaVersion, updatedAt, robots, missions]

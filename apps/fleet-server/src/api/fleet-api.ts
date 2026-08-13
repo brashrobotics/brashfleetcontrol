@@ -9,6 +9,9 @@ import {
   parseCreateTrafficRestrictionRequest,
   parseCreateWorkflowRequest,
   parseCreateWorkOrderRequest,
+  parseQuarantineRobotRequest,
+  parseReassignRecoveryMissionRequest,
+  parseReleaseRobotQuarantineRequest,
   parseUpdateInfrastructureResourceStatusRequest,
 } from "@brash/contracts";
 import { DomainError } from "@brash/domain";
@@ -102,6 +105,15 @@ export class FleetApi {
       if (request.method === "POST" && capabilityAssignmentMatch) {
         const input = parseAssignCapabilityProfileRequest(await request.json());
         return json({ robot: await this.core.assignRobotCapabilityProfile(decodeURIComponent(capabilityAssignmentMatch[1]), input.profileId, input.operatorId) });
+      }
+
+      const robotQuarantineMatch = url.pathname.match(/^\/api\/v1\/robots\/([^/]+)\/(quarantine|release-quarantine)$/);
+      if (request.method === "POST" && robotQuarantineMatch) {
+        const robotId = decodeURIComponent(robotQuarantineMatch[1]);
+        const robot = robotQuarantineMatch[2] === "quarantine"
+          ? await this.core.quarantineRobot(robotId, parseQuarantineRobotRequest(await request.json()))
+          : await this.core.releaseRobotQuarantine(robotId, parseReleaseRobotQuarantineRequest(await request.json()));
+        return json({ robot });
       }
 
       if (request.method === "POST" && url.pathname === "/api/v1/work-orders") {
@@ -258,6 +270,12 @@ export class FleetApi {
       if (request.method === "POST" && cancellationMatch) {
         const cancellation = await this.core.cancelMission(decodeURIComponent(cancellationMatch[1]));
         return json({ cancellation }, cancellation.mission.state === "CANCELLED" ? 200 : 202);
+      }
+
+      const recoveryReassignmentMatch = url.pathname.match(/^\/api\/v1\/missions\/([^/]+)\/reassign-recovery$/);
+      if (request.method === "POST" && recoveryReassignmentMatch) {
+        const input = parseReassignRecoveryMissionRequest(await request.json());
+        return json({ dispatch: await this.core.reassignRecoveryMission(decodeURIComponent(recoveryReassignmentMatch[1]), input) });
       }
 
       return json({ error: { code: "NOT_FOUND", message: "Fleet API endpoint was not found." } }, 404);

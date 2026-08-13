@@ -76,6 +76,34 @@ export interface AssignCapabilityProfileRequest {
   operatorId: string;
 }
 
+export interface QuarantineRobotRequest {
+  reason: string;
+  operatorId: string;
+}
+
+export interface ReleaseRobotQuarantineRequest {
+  inspectionReference: string;
+  operatorId: string;
+}
+
+export interface ReassignRecoveryMissionRequest {
+  commandCleared: boolean;
+  clearanceEvidence: string;
+  targetRobotId?: string;
+  operatorId: string;
+}
+
+export interface RobotOperatorControlView {
+  robotId: string;
+  status: "QUARANTINED" | "CLEARED";
+  reason: string;
+  quarantinedBy: string;
+  quarantinedAt: string;
+  clearedBy: string | null;
+  clearedAt: string | null;
+  inspectionReference: string | null;
+}
+
 export interface RobotDescriptor {
   robotId: string;
   displayName: string;
@@ -280,6 +308,7 @@ export type FleetPermission =
   | "map:manage"
   | "resource:manage"
   | "capability:manage"
+  | "recovery:manage"
   | "integration:read"
   | "integration:manage"
   | "observability:read"
@@ -364,6 +393,7 @@ export interface OperationalAnalyticsView {
 
 export interface RobotView extends RobotDescriptor {
   state: RobotStateSnapshot;
+  operatorControl: RobotOperatorControlView | null;
 }
 
 export interface FleetSnapshot {
@@ -609,6 +639,7 @@ export interface FleetRecoveryStatusView {
   evaluatedAt: string;
   degradedRobots: number;
   offlineRobots: number;
+  quarantinedRobots: number;
   recoveryRequiredMissions: number;
   safetyHolds: number;
   nextLeaseExpiryAt: string | null;
@@ -708,6 +739,8 @@ export type MissionEventType =
   | "MISSION_RECOVERY_REQUIRED"
   | "MISSION_RECOVERED"
   | "MISSION_RECOVERY_REQUEUED"
+  | "MISSION_OPERATOR_REASSIGNED"
+  | "ROBOT_OPERATOR_QUARANTINED"
   | "TRAFFIC_SAFETY_HOLD"
   | "COMMAND_DELIVERY_FAILED"
   | "COMMAND_DISPATCHED"

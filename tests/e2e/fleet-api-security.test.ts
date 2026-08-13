@@ -89,6 +89,20 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
     const restriction = await restricted.json() as { restriction: { createdBy: string } };
     assert.equal(restriction.restriction.createdBy, "operator-1");
 
+    const quarantineCorrelationId = "security-quarantine-correlation";
+    const quarantineResponse = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/robots/BR-02/quarantine", OPERATOR_TOKEN, {
+      method: "POST",
+      headers: { "x-correlation-id": quarantineCorrelationId },
+      body: JSON.stringify({ reason: "Operator API inspection", operatorId: "spoofed-identity" }),
+    }));
+    assert.equal(quarantineResponse.status, 200);
+    const quarantineBody = await quarantineResponse.json() as { robot: { operatorControl: { quarantinedBy: string; status: string } } };
+    assert.equal(quarantineBody.robot.operatorControl.quarantinedBy, "operator-1");
+    assert.equal(quarantineBody.robot.operatorControl.status, "QUARANTINED");
+    const quarantineAudit = await audit.list({ limit: 10, correlationId: quarantineCorrelationId });
+    assert.deepEqual(quarantineAudit.map((event) => event.outcome).sort(), ["ATTEMPTED", "SUCCEEDED"]);
+    assert.ok(quarantineAudit.every((event) => event.action === "robot.quarantine.manage"));
+
     const operatorAuditRead = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/audit/events", OPERATOR_TOKEN));
     assert.equal(operatorAuditRead.status, 403);
     const adminAuditRead = await api.fetch(authenticatedRequest(

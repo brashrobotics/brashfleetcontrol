@@ -16,6 +16,9 @@ import type {
   MissionLocation,
   UpdateInfrastructureResourceStatusRequest,
   RobotAssignmentConstraints,
+  QuarantineRobotRequest,
+  ReleaseRobotQuarantineRequest,
+  ReassignRecoveryMissionRequest,
   WorkflowStepDefinition,
   WorkOrderFollowUpAction,
 } from "./fleet-contracts.js";
@@ -233,6 +236,35 @@ export function parseAssignCapabilityProfileRequest(value: unknown): AssignCapab
   const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
   if (issues.length) throw new ContractValidationError(issues);
   return { profileId, operatorId };
+}
+
+export function parseQuarantineRobotRequest(value: unknown): QuarantineRobotRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const reason = nonEmptyString(value.reason, "reason", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length) throw new ContractValidationError(issues);
+  return { reason, operatorId };
+}
+
+export function parseReleaseRobotQuarantineRequest(value: unknown): ReleaseRobotQuarantineRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const inspectionReference = nonEmptyString(value.inspectionReference, "inspectionReference", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length) throw new ContractValidationError(issues);
+  return { inspectionReference, operatorId };
+}
+
+export function parseReassignRecoveryMissionRequest(value: unknown): ReassignRecoveryMissionRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  if (value.commandCleared !== true) issues.push("commandCleared must be true before recovery reassignment.");
+  const clearanceEvidence = nonEmptyString(value.clearanceEvidence, "clearanceEvidence", issues);
+  const targetRobotId = value.targetRobotId === undefined ? undefined : nonEmptyString(value.targetRobotId, "targetRobotId", issues);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  if (issues.length) throw new ContractValidationError(issues);
+  return { commandCleared: true, clearanceEvidence, ...(targetRobotId ? { targetRobotId } : {}), operatorId };
 }
 
 export function parseAlarmActionRequest(value: unknown): AlarmActionRequest {

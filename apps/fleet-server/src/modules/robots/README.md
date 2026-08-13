@@ -17,8 +17,21 @@ Core does not assume that a disconnected robot stopped moving. Reconnection can
 resume the existing mission or explicitly clear and fence the old robot before
 the mission is requeued.
 
+Operators can quarantine a robot through
+`POST /api/v1/robots/{robotId}/quarantine`. The durable operator-control record
+overrides newer `AVAILABLE` telemetry, excludes the robot from mission and
+work-order allocation, and moves an owned mission to `RECOVERY_REQUIRED` with a
+traffic safety hold. Quarantine release requires the adapter to report
+`ONLINE`, `AVAILABLE`, and no active mission, plus an inspection reference.
+
+`POST /api/v1/missions/{missionId}/reassign-recovery` requires an explicit
+old-command clearance declaration and evidence. Fleet Core quarantines the old
+owner, cancels its pending outbox command, releases the conservative hold, and
+can force dispatch to a nominated eligible replacement. The previous robot is
+not returned to service automatically.
+
 Future work includes configurable per-adapter thresholds, clock-skew metrics,
-manual recovery approval, and robot deactivation.
+and long-term robot deactivation.
 
 ## Boundaries
 

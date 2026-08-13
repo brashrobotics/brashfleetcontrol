@@ -155,6 +155,8 @@ function authorizationRule(method: string, pathname: string): AuthorizationRule 
   if (method === "POST" && pathname === "/api/v1/missions") return rule("mission:create", "mission.create", "MISSION", "new", true);
   if (/^\/api\/v1\/missions\/[^/]+\/dispatch$/.test(pathname)) return rule("mission:dispatch", "mission.dispatch", "MISSION", segment(pathname, -2), true);
   if (/^\/api\/v1\/missions\/[^/]+\/cancel$/.test(pathname)) return rule("mission:cancel", "mission.cancel", "MISSION", segment(pathname, -2), true);
+  if (/^\/api\/v1\/missions\/[^/]+\/reassign-recovery$/.test(pathname)) return rule("recovery:manage", "mission.recovery.reassign", "MISSION", segment(pathname, -2), true);
+  if (/^\/api\/v1\/robots\/[^/]+\/(quarantine|release-quarantine)$/.test(pathname)) return rule("recovery:manage", "robot.quarantine.manage", "ROBOT", segment(pathname, -2), true);
   if (method === "POST" && pathname === "/api/v1/workflows") return rule("workflow:create", "workflow.create", "WORKFLOW", "new", true);
   if (/^\/api\/v1\/workflows\/[^/]+\/cancel$/.test(pathname)) return rule("workflow:cancel", "workflow.cancel", "WORKFLOW", segment(pathname, -2), true);
   if (method === "POST" && pathname === "/api/v1/work-orders") return rule("orchestrator:submit", "work_order.submit", "WORK_ORDER", "new", true);

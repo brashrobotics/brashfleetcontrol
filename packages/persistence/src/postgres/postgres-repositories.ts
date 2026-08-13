@@ -27,6 +27,7 @@ import type {
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
+  RobotOperatorControlRecord,
   RaiseAlarmInput,
   TrafficPlanRepository,
   TrafficRestrictionRecord,
@@ -114,6 +115,17 @@ interface RobotRow {
   last_seen_at: Date;
   connection_changed_at: Date;
   capability_metadata: import("@brash/domain").RobotCapabilityMetadata;
+}
+
+interface RobotOperatorControlRow {
+  robot_id: string;
+  status: RobotOperatorControlRecord["status"];
+  reason: string;
+  quarantined_by: string;
+  quarantined_at: Date;
+  cleared_by: string | null;
+  cleared_at: Date | null;
+  inspection_reference: string | null;
 }
 
 interface CapabilityProfileRow {
@@ -785,6 +797,40 @@ export class PostgresRobotRepository implements RobotRepository {
       snapshot.connectionChangedAt,
       JSON.stringify(snapshot.capabilityMetadata),
     ]);
+  }
+
+  async getOperatorControl(robotId: string): Promise<RobotOperatorControlRecord | null> {
+    const result = await this.database.query<RobotOperatorControlRow>("SELECT * FROM robot_operator_controls WHERE robot_id=$1", [robotId]);
+    return result.rows[0] ? robotOperatorControlFromRow(result.rows[0]) : null;
+  }
+
+  async listOperatorControls(activeOnly = false): Promise<RobotOperatorControlRecord[]> {
+    const result = await this.database.query<RobotOperatorControlRow>(`
+      SELECT * FROM robot_operator_controls
+      WHERE ($1::boolean = false OR status='QUARANTINED')
+      ORDER BY quarantined_at DESC, robot_id
+    `, [activeOnly]);
+    return result.rows.map(robotOperatorControlFromRow);
+  }
+
+  async quarantine(record: RobotOperatorControlRecord): Promise<void> {
+    await this.database.query(`
+      INSERT INTO robot_operator_controls (
+        robot_id,status,reason,quarantined_by,quarantined_at,cleared_by,cleared_at,inspection_reference
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (robot_id) DO UPDATE SET status=EXCLUDED.status, reason=EXCLUDED.reason,
+        quarantined_by=EXCLUDED.quarantined_by, quarantined_at=EXCLUDED.quarantined_at,
+        cleared_by=NULL, cleared_at=NULL, inspection_reference=NULL
+    `, [record.robotId, record.status, record.reason, record.quarantinedBy, record.quarantinedAt,
+      record.clearedBy, record.clearedAt, record.inspectionReference]);
+  }
+
+  async clearQuarantine(robotId: string, operatorId: string, inspectionReference: string, at: Date): Promise<RobotOperatorControlRecord | null> {
+    const result = await this.database.query<RobotOperatorControlRow>(`
+      UPDATE robot_operator_controls SET status='CLEARED', cleared_by=$2, cleared_at=$4, inspection_reference=$3
+      WHERE robot_id=$1 AND status='QUARANTINED' RETURNING *
+    `, [robotId, operatorId, inspectionReference, at]);
+    return result.rows[0] ? robotOperatorControlFromRow(result.rows[0]) : null;
   }
 }
 
@@ -1955,4 +2001,17 @@ function robotFromRow(row: RobotRow): Robot {
     lastSeenAt: new Date(row.last_seen_at),
     connectionChangedAt: new Date(row.connection_changed_at),
   });
+}
+
+function robotOperatorControlFromRow(row: RobotOperatorControlRow): RobotOperatorControlRecord {
+  return {
+    robotId: row.robot_id,
+    status: row.status,
+    reason: row.reason,
+    quarantinedBy: row.quarantined_by,
+    quarantinedAt: new Date(row.quarantined_at),
+    clearedBy: row.cleared_by,
+    clearedAt: row.cleared_at ? new Date(row.cleared_at) : null,
+    inspectionReference: row.inspection_reference,
+  };
 }

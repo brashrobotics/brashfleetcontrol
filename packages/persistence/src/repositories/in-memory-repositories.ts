@@ -27,6 +27,7 @@ import type {
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
+  RobotOperatorControlRecord,
   RaiseAlarmInput,
   TrafficPlanRepository,
   TrafficRestrictionRecord,
@@ -301,6 +302,7 @@ export class InMemoryMissionQueueRepository implements MissionQueueRepository {
 
 export class InMemoryRobotRepository implements RobotRepository {
   private readonly robots = new Map<string, Robot>();
+  private readonly controls = new Map<string, RobotOperatorControlRecord>();
 
   async getById(robotId: string, _options?: RepositoryReadOptions): Promise<Robot | null> {
     return this.robots.get(robotId) ?? null;
@@ -312,6 +314,32 @@ export class InMemoryRobotRepository implements RobotRepository {
 
   async save(robot: Robot): Promise<void> {
     this.robots.set(robot.robotId, robot);
+  }
+
+  async getOperatorControl(robotId: string): Promise<RobotOperatorControlRecord | null> {
+    const control = this.controls.get(robotId);
+    return control ? cloneRobotOperatorControl(control) : null;
+  }
+
+  async listOperatorControls(activeOnly = false): Promise<RobotOperatorControlRecord[]> {
+    return [...this.controls.values()]
+      .filter((control) => !activeOnly || control.status === "QUARANTINED")
+      .sort((left, right) => right.quarantinedAt.getTime() - left.quarantinedAt.getTime() || left.robotId.localeCompare(right.robotId))
+      .map(cloneRobotOperatorControl);
+  }
+
+  async quarantine(record: RobotOperatorControlRecord): Promise<void> {
+    this.controls.set(record.robotId, cloneRobotOperatorControl(record));
+  }
+
+  async clearQuarantine(robotId: string, operatorId: string, inspectionReference: string, at: Date): Promise<RobotOperatorControlRecord | null> {
+    const control = this.controls.get(robotId);
+    if (!control || control.status !== "QUARANTINED") return null;
+    control.status = "CLEARED";
+    control.clearedBy = operatorId;
+    control.clearedAt = new Date(at);
+    control.inspectionReference = inspectionReference;
+    return cloneRobotOperatorControl(control);
   }
 }
 
@@ -1041,6 +1069,14 @@ export class InMemoryAuditRepository implements AuditRepository {
 
 function cloneAuditEvent(event: AuditEventRecord): AuditEventRecord {
   return { ...event, occurredAt: new Date(event.occurredAt), metadata: structuredClone(event.metadata) };
+}
+
+function cloneRobotOperatorControl(control: RobotOperatorControlRecord): RobotOperatorControlRecord {
+  return {
+    ...control,
+    quarantinedAt: new Date(control.quarantinedAt),
+    clearedAt: control.clearedAt ? new Date(control.clearedAt) : null,
+  };
 }
 
 function cloneWorkOrder(record: WorkOrderRecord): WorkOrderRecord {

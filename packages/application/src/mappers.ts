@@ -3,6 +3,7 @@ import {
   type MapTopologyView,
   type MissionView,
   type RobotView,
+  type RobotOperatorControlView,
   type TrafficPlanView,
   type TrafficReservationView,
 } from "@brash/contracts";
@@ -38,7 +39,7 @@ export function missionToView(mission: Mission): MissionView {
   };
 }
 
-export function robotToView(robot: Robot): RobotView {
+export function robotToView(robot: Robot, operatorControl: RobotOperatorControlView | null = null): RobotView {
   const snapshot = robot.snapshot();
   return {
     robotId: snapshot.robotId,
@@ -64,6 +65,7 @@ export function robotToView(robot: Robot): RobotView {
       pose: { ...snapshot.pose },
       activeMissionId: snapshot.activeMissionId,
     },
+    operatorControl: operatorControl ? structuredClone(operatorControl) : null,
   };
 }
 

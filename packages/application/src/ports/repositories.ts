@@ -271,6 +271,21 @@ export interface RobotRepository {
   getById(robotId: string, options?: RepositoryReadOptions): Promise<Robot | null>;
   list(options?: RepositoryReadOptions): Promise<Robot[]>;
   save(robot: Robot): Promise<void>;
+  getOperatorControl(robotId: string): Promise<RobotOperatorControlRecord | null>;
+  listOperatorControls(activeOnly?: boolean): Promise<RobotOperatorControlRecord[]>;
+  quarantine(record: RobotOperatorControlRecord): Promise<void>;
+  clearQuarantine(robotId: string, operatorId: string, inspectionReference: string, at: Date): Promise<RobotOperatorControlRecord | null>;
+}
+
+export interface RobotOperatorControlRecord {
+  robotId: string;
+  status: "QUARANTINED" | "CLEARED";
+  reason: string;
+  quarantinedBy: string;
+  quarantinedAt: Date;
+  clearedBy: string | null;
+  clearedAt: Date | null;
+  inspectionReference: string | null;
 }
 
 export interface CapabilityProfileRecord extends CreateCapabilityProfileRequest {

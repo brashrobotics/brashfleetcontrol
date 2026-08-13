@@ -356,6 +356,40 @@ test("PostgreSQL persists published capability profiles and robot assignments", 
   } finally { await core.stop(); await persistence.close(); }
 });
 
+test("PostgreSQL preserves operator quarantine across Fleet Core restart", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-QUARANTINE-${suffix}`;
+  const capability = `quarantine-${suffix}`;
+  const clock = new ManualClock(new Date().toISOString());
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  await persistence.maps.save(createDefaultPlantTopology());
+  const first = createCore(persistence, `QR1-${suffix}`, robotId, capability, clock);
+  try {
+    await first.start();
+    await first.quarantineRobot(robotId, { reason: "PostgreSQL restart test", operatorId: "pg-operator" });
+    assert.equal((await persistence.robots.getOperatorControl(robotId))?.status, "QUARANTINED");
+    await first.stop();
+
+    const restarted = createCore(persistence, `QR2-${suffix}`, robotId, capability, clock);
+    await restarted.start();
+    try {
+      const robot = (await restarted.getSnapshot()).robots.find((candidate) => candidate.robotId === robotId)!;
+      assert.equal(robot.state.availability, "ERROR");
+      assert.equal(robot.operatorControl?.status, "QUARANTINED");
+      const released = await restarted.releaseRobotQuarantine(robotId, { inspectionReference: `PG-INSPECTION-${suffix}`, operatorId: "pg-operator" });
+      assert.equal(released.operatorControl?.status, "CLEARED");
+    } finally {
+      await restarted.stop();
+    }
+  } finally {
+    await first.stop();
+    await persistence.close();
+  }
+});
+
 test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap", {
   skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
 }, async () => {

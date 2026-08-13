@@ -26,6 +26,10 @@ import {
   type MissionEventType,
   type MissionEventView,
   type MissionView,
+  type QuarantineRobotRequest,
+  type ReassignRecoveryMissionRequest,
+  type ReleaseRobotQuarantineRequest,
+  type RobotOperatorControlView,
   type OperationalAnalyticsView,
   type RobotAdapterEvent,
   type TrafficPlanView,
@@ -72,6 +76,7 @@ import type {
   MapVersionRecord,
   PendingCommand,
   RobotRepository,
+  RobotOperatorControlRecord,
   TrafficPlanRepository,
   TrafficRestrictionRecord,
   TrafficRestrictionRepository,
@@ -241,6 +246,8 @@ export class FleetCore {
               };
           const registered = Robot.register(registration, telemetry);
           registered.acknowledgeContact(this.dependencies.clock.now());
+          const operatorControl = await this.dependencies.robots.getOperatorControl(descriptor.robotId);
+          if (operatorControl?.status === "QUARANTINED") registered.quarantine(state.activeMissionId ?? "operator-quarantine", this.dependencies.clock.now());
           await this.dependencies.robots.save(registered);
         });
       }
@@ -330,6 +337,7 @@ export class FleetCore {
   async assignRobotCapabilityProfile(robotId: string, profileId: string, _operatorId: string): Promise<import("@brash/contracts").RobotView> {
     return this.dependencies.transactions.runExclusive(async () => {
       const robot = await this.requireRobot(robotId, true);
+      if ((await this.dependencies.robots.getOperatorControl(robotId))?.status === "QUARANTINED") throw new DomainError("ROBOT_QUARANTINED", `Robot ${robotId} is quarantined.`);
       if (robot.availability !== "AVAILABLE") throw new DomainError("ROBOT_PROFILE_CHANGE_UNSAFE", `Robot ${robotId} must be AVAILABLE before changing its capability profile.`);
       const profile = await this.dependencies.capabilityProfiles.getById(profileId);
       if (!profile || profile.status !== "PUBLISHED") throw new DomainError("CAPABILITY_PROFILE_NOT_PUBLISHED", `Capability profile ${profileId} is not published.`);
@@ -341,14 +349,148 @@ export class FleetCore {
     });
   }
 
-  async dispatchMission(missionId: string): Promise<DispatchResult> {
+  async quarantineRobot(robotId: string, request: QuarantineRobotRequest): Promise<import("@brash/contracts").RobotView> {
+    this.assertStarted();
+    return this.dependencies.transactions.runExclusive(async () => {
+      const robot = await this.requireRobot(robotId, true);
+      const now = this.dependencies.clock.now();
+      const activeMissionId = robot.activeMissionId;
+      const control: RobotOperatorControlRecord = {
+        robotId,
+        status: "QUARANTINED",
+        reason: request.reason,
+        quarantinedBy: request.operatorId,
+        quarantinedAt: now,
+        clearedBy: null,
+        clearedAt: null,
+        inspectionReference: null,
+      };
+      await this.dependencies.robots.quarantine(control);
+      robot.quarantine(activeMissionId ?? "operator-quarantine", now);
+      await this.dependencies.robots.save(robot);
+      await this.dependencies.alarms.raise({
+        fingerprint: `operator-quarantine:${robotId}`,
+        code: "ROBOT_OPERATOR_QUARANTINED",
+        severity: "WARNING",
+        title: `${robotId} is quarantined`,
+        message: request.reason,
+        sourceType: "ROBOT",
+        sourceId: robotId,
+        occurredAt: now,
+      });
+      if (activeMissionId) {
+        const mission = await this.dependencies.missions.getById(activeMissionId, { forUpdate: true });
+        if (mission && ["ASSIGNED", "DISPATCHED", "EXECUTING"].includes(mission.state)) {
+          mission.requireRecovery(`Robot ${robotId} was quarantined by ${request.operatorId}: ${request.reason}`, now);
+          await this.dependencies.commands.deferPendingByMission(mission.missionId, new Date(now.getTime() + 24 * 60 * 60_000), "Command suspended by operator quarantine.");
+          await this.dependencies.traffic.placeSafetyHoldByMission(mission.missionId, now);
+          await this.dependencies.missions.save(mission);
+          await this.appendMissionEvent(mission, "ROBOT_OPERATOR_QUARANTINED", request.reason, now, { operatorId: request.operatorId });
+          await this.dependencies.alarms.raise({
+            fingerprint: `mission-recovery:${mission.missionId}`,
+            code: "MISSION_RECOVERY_REQUIRED",
+            severity: "CRITICAL",
+            title: `${mission.missionId} requires recovery`,
+            message: `Operator quarantine removed ${robotId} from service while it owned the mission.`,
+            sourceType: "MISSION",
+            sourceId: mission.missionId,
+            occurredAt: now,
+          });
+        }
+      }
+      return robotToView(robot, this.robotOperatorControlToView(control));
+    });
+  }
+
+  async releaseRobotQuarantine(robotId: string, request: ReleaseRobotQuarantineRequest): Promise<import("@brash/contracts").RobotView> {
+    this.assertStarted();
+    const adapterState = await this.dependencies.adapter.getState(robotId);
+    if (adapterState.connection !== "ONLINE" || adapterState.availability !== "AVAILABLE" || adapterState.activeMissionId !== null) {
+      throw new DomainError("ROBOT_QUARANTINE_RELEASE_UNSAFE", `Robot ${robotId} must report ONLINE, AVAILABLE, and no active mission before quarantine release.`);
+    }
+    return this.dependencies.transactions.runExclusive(async () => {
+      const robot = await this.requireRobot(robotId, true);
+      const now = this.dependencies.clock.now();
+      const control = await this.dependencies.robots.clearQuarantine(robotId, request.operatorId, request.inspectionReference, now);
+      if (!control) throw new DomainError("ROBOT_NOT_QUARANTINED", `Robot ${robotId} is not quarantined.`);
+      if (robot.activeMissionId !== null) throw new DomainError("ROBOT_QUARANTINE_RELEASE_UNSAFE", `Robot ${robotId} still owns a mission.`);
+      if (robot.availability === "ERROR") robot.release("operator-quarantine", now);
+      await this.dependencies.robots.save(robot);
+      await this.dependencies.alarms.resolveByFingerprint(`operator-quarantine:${robotId}`, now);
+      return robotToView(robot, this.robotOperatorControlToView(control));
+    });
+  }
+
+  async reassignRecoveryMission(missionId: string, request: ReassignRecoveryMissionRequest): Promise<DispatchResult> {
+    this.assertStarted();
+    if (request.commandCleared !== true || !request.clearanceEvidence.trim()) throw new DomainError("MISSION_RECOVERY_CLEARANCE_REQUIRED", "Explicit command clearance evidence is required before reassignment.");
+    await this.dependencies.transactions.runExclusive(async () => {
+      const mission = await this.requireMission(missionId, true);
+      if (mission.state !== "RECOVERY_REQUIRED") throw new DomainError("MISSION_NOT_RECOVERABLE", `Mission ${missionId} is ${mission.state}, not RECOVERY_REQUIRED.`);
+      const previousRobotId = mission.assignedRobotId;
+      if (!previousRobotId) throw new DomainError("MISSION_RECOVERY_OWNER_MISSING", `Mission ${missionId} has no previous robot owner.`);
+      if (request.targetRobotId === previousRobotId) throw new DomainError("MISSION_RECOVERY_TARGET_UNSAFE", "The quarantined previous robot cannot be the reassignment target.");
+      if (request.targetRobotId) {
+        const target = await this.requireRobot(request.targetRobotId, true);
+        const targetControl = await this.dependencies.robots.getOperatorControl(target.robotId);
+        if (targetControl?.status === "QUARANTINED") throw new DomainError("MISSION_RECOVERY_TARGET_QUARANTINED", `Target robot ${target.robotId} is quarantined.`);
+        const candidate = this.dependencies.dispatchPolicy.select(mission, [target]).candidates[0];
+        if (!candidate?.eligible) throw new DomainError("MISSION_RECOVERY_TARGET_INELIGIBLE", candidate?.reasons.join(" ") ?? "Target robot is not eligible.");
+      }
+      const previousRobot = await this.requireRobot(previousRobotId, true);
+      const now = this.dependencies.clock.now();
+      const previousCommandId = mission.commandId;
+      const control: RobotOperatorControlRecord = {
+        robotId: previousRobotId,
+        status: "QUARANTINED",
+        reason: `Recovery reassignment for ${missionId}: ${request.clearanceEvidence}`,
+        quarantinedBy: request.operatorId,
+        quarantinedAt: now,
+        clearedBy: null,
+        clearedAt: null,
+        inspectionReference: null,
+      };
+      await this.dependencies.robots.quarantine(control);
+      previousRobot.quarantine(missionId, now);
+      mission.requeueAfterRecovery(`Operator ${request.operatorId} confirmed the old command is clear.`, now);
+      await this.dependencies.commands.cancelPendingByMission(missionId, now, "Superseded by operator recovery reassignment.");
+      await this.dependencies.missionQueue.enqueue(missionId, mission.priority, now);
+      await this.releaseTrafficPlan(mission, now, "Operator confirmed the prior command is clear; safety hold released.");
+      await this.dependencies.robots.save(previousRobot);
+      await this.dependencies.missions.save(mission);
+      await this.dependencies.alarms.resolveByFingerprint(`mission-recovery:${missionId}`, now);
+      await this.dependencies.alarms.raise({
+        fingerprint: `operator-quarantine:${previousRobotId}`,
+        code: "ROBOT_OPERATOR_QUARANTINED",
+        severity: "WARNING",
+        title: `${previousRobotId} quarantined after recovery`,
+        message: request.clearanceEvidence,
+        sourceType: "ROBOT",
+        sourceId: previousRobotId,
+        occurredAt: now,
+      });
+      await this.appendMissionEvent(mission, "MISSION_OPERATOR_REASSIGNED", "Operator cleared uncertain command ownership and requested reassignment.", now, {
+        operatorId: request.operatorId,
+        clearanceEvidence: request.clearanceEvidence,
+        previousRobotId,
+        previousCommandId,
+        targetRobotId: request.targetRobotId ?? null,
+      });
+    });
+    return this.dispatchMission(missionId, request.targetRobotId);
+  }
+
+  async dispatchMission(missionId: string, requiredRobotId?: string): Promise<DispatchResult> {
     this.assertStarted();
     const preparation = await this.dependencies.transactions.runExclusive(async () => {
       const mission = await this.requireMission(missionId, true);
       if (mission.state !== "QUEUED") {
         throw new DomainError("MISSION_NOT_QUEUED", `Mission ${missionId} is ${mission.state}.`);
       }
-      const robots = await this.dependencies.robots.list();
+      const quarantined = new Set((await this.dependencies.robots.listOperatorControls(true)).map((control) => control.robotId));
+      const robots = (await this.dependencies.robots.list())
+        .filter((robot) => !quarantined.has(robot.robotId))
+        .filter((robot) => !requiredRobotId || robot.robotId === requiredRobotId);
       const initialDecision = this.dependencies.dispatchPolicy.select(mission, robots);
       let robot: Robot | null = null;
       let selectedCandidate = null as AssignmentDecision["candidates"][number] | null;
@@ -358,6 +500,7 @@ export class FleetCore {
           skipLocked: true,
         });
         if (!locked) continue;
+        if ((await this.dependencies.robots.getOperatorControl(locked.robotId))?.status === "QUARANTINED") continue;
         const reevaluated = this.dependencies.dispatchPolicy.select(mission, [locked]).candidates[0];
         if (!reevaluated?.eligible) continue;
         robot = locked;
@@ -1060,10 +1203,11 @@ export class FleetCore {
 
   async getRecoveryStatus(): Promise<FleetRecoveryStatusView> {
     const evaluatedAt = this.dependencies.clock.now();
-    const [robots, missions, maps] = await Promise.all([
+    const [robots, missions, maps, controls] = await Promise.all([
       this.dependencies.robots.list(),
       this.dependencies.missions.list(),
       this.dependencies.maps.list(),
+      this.dependencies.robots.listOperatorControls(true),
     ]);
     const plans = (await Promise.all(maps.map((map) => this.dependencies.traffic.listByMap(map.mapId)))).flat();
     const renewable = plans.filter((plan) => plan.status === "ACTIVE");
@@ -1071,6 +1215,7 @@ export class FleetCore {
       evaluatedAt: evaluatedAt.toISOString(),
       degradedRobots: robots.filter((robot) => robot.connection === "DEGRADED").length,
       offlineRobots: robots.filter((robot) => robot.connection === "OFFLINE").length,
+      quarantinedRobots: controls.length,
       recoveryRequiredMissions: missions.filter((mission) => mission.state === "RECOVERY_REQUIRED").length,
       safetyHolds: plans.filter((plan) => plan.status === "SAFETY_HOLD").length,
       nextLeaseExpiryAt: renewable.length > 0
@@ -1267,14 +1412,16 @@ export class FleetCore {
   }
 
   async getSnapshot(): Promise<FleetSnapshot> {
-    const [robots, missions] = await Promise.all([
+    const [robots, missions, controls] = await Promise.all([
       this.dependencies.robots.list(),
       this.dependencies.missions.list(),
+      this.dependencies.robots.listOperatorControls(),
     ]);
+    const controlByRobot = new Map(controls.map((control) => [control.robotId, control]));
     return {
       schemaVersion: FLEET_SCHEMA_VERSION,
       updatedAt: this.dependencies.clock.now().toISOString(),
-      robots: robots.map(robotToView),
+      robots: robots.map((robot) => robotToView(robot, this.robotOperatorControlToView(controlByRobot.get(robot.robotId) ?? null))),
       missions: missions.map(missionToView),
     };
   }
@@ -1364,6 +1511,8 @@ export class FleetCore {
           activeMissionId: event.state.activeMissionId,
         }, receivedAt);
         if (!applied) return;
+        const operatorControl = await this.dependencies.robots.getOperatorControl(robot.robotId);
+        if (operatorControl?.status === "QUARANTINED") robot.quarantine(event.state.activeMissionId ?? "operator-quarantine", receivedAt);
 
         if (event.state.connection === "ONLINE") {
           await this.dependencies.alarms.resolveByFingerprint(`robot-heartbeat-degraded:${robot.robotId}`, receivedAt);
@@ -1955,6 +2104,14 @@ export class FleetCore {
       deliveredAt: event.deliveredAt?.toISOString() ?? null,
       leaseExpiresAt: event.leaseExpiresAt?.toISOString() ?? null,
     };
+  }
+
+  private robotOperatorControlToView(control: RobotOperatorControlRecord | null): RobotOperatorControlView | null {
+    return control ? {
+      ...control,
+      quarantinedAt: control.quarantinedAt.toISOString(),
+      clearedAt: control.clearedAt?.toISOString() ?? null,
+    } : null;
   }
 
   private capabilityProfileToView(record: CapabilityProfileRecord): CapabilityProfileView {
