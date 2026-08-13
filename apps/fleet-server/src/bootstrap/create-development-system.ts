@@ -10,6 +10,7 @@ import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } f
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
   InMemoryAssignmentDecisionRepository,
+  InMemoryAlarmRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionQueueRepository,
@@ -71,6 +72,7 @@ export function createDevelopmentSystem() {
   const topology = createDefaultPlantTopology();
 
   const core = new FleetCore({
+    alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),

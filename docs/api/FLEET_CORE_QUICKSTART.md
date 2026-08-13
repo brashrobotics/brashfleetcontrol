@@ -61,6 +61,7 @@ PostgreSQL persists:
 - Route plans and edge/node reservation time windows.
 - Robot heartbeat timestamps, recovery state, and renewable route leases.
 - Priority-aged dispatch queue attempts, retry times, errors, and worker leases.
+- Operational alarms, occurrence counters, acknowledgement records, and resolution history.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
@@ -141,6 +142,7 @@ curl 'http://127.0.0.1:4273/api/v1/traffic/schedule?mapId=plant-a%401'
 curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/route
 curl http://127.0.0.1:4273/api/v1/recovery/status
 curl http://127.0.0.1:4273/api/v1/dispatch/queue
+curl http://127.0.0.1:4273/api/v1/alarms
 ```
 
 The operator dashboard renders the same topology and colors active/upcoming
@@ -148,6 +150,21 @@ reserved lanes. Its traffic card shows route timing and wait duration.
 Safety holds are red; robot details show heartbeat age and connection state.
 The mission table shows each queued mission's effective priority and next
 automatic dispatch attempt.
+
+Robot heartbeat loss, recovery-required missions, command-delivery failures,
+and rejected cancellation requests create deduplicated alarms. Repeated
+observations increment one alarm instead of flooding the operator. Acknowledge
+an active alarm with:
+
+```bash
+curl -X POST http://127.0.0.1:4273/api/v1/alarms/ALARM_ID/acknowledge \
+  -H 'content-type: application/json' \
+  -d '{"operatorId":"operator-1","note":"Area inspection started"}'
+```
+
+Acknowledgement records operator ownership but does not hide the condition.
+Fleet Core resolves the alarm only when the underlying robot or mission state
+is safe again.
 
 Select any mission row in the dashboard to open its durable event timeline, or
 query it directly:

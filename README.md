@@ -29,6 +29,7 @@ What works today:
 - Safe mission recovery or reassignment after explicit robot-state confirmation
 - Operator-initiated mission cancellation with robot confirmation and safe traffic release
 - Durable priority mission queue with aging, retry backoff, and multi-instance worker leases
+- Persistent, deduplicated alarms with severity, acknowledgement, and automatic resolution
 
 What is not production-ready yet:
 

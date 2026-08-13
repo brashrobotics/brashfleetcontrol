@@ -275,6 +275,55 @@ test("PostgreSQL persists cancellation audit events and releases the reserved ro
   }
 });
 
+test("PostgreSQL deduplicates, acknowledges, and resolves operational alarms", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const persistence = createPersistence(databaseUrl!);
+  await persistence.migrate();
+  const occurredAt = new Date();
+  const input = {
+    fingerprint: `postgres-alarm:${suffix}`,
+    code: "POSTGRES_TEST_ALARM",
+    severity: "WARNING" as const,
+    title: "PostgreSQL alarm lifecycle test",
+    message: "First observation",
+    sourceType: "SYSTEM" as const,
+    sourceId: `test-${suffix}`,
+    occurredAt,
+  };
+
+  try {
+    const first = await persistence.alarms.raise(input);
+    const repeated = await persistence.alarms.raise({
+      ...input,
+      message: "Second observation",
+      occurredAt: new Date(occurredAt.getTime() + 1_000),
+    });
+    assert.equal(repeated.alarmId, first.alarmId);
+    assert.equal(repeated.occurrenceCount, 2);
+    assert.equal(repeated.message, "Second observation");
+
+    const acknowledged = await persistence.alarms.acknowledge(
+      first.alarmId,
+      "postgres-test-operator",
+      "Acknowledged in integration test",
+      new Date(occurredAt.getTime() + 2_000),
+    );
+    assert.equal(acknowledged?.status, "ACKNOWLEDGED");
+    assert.equal(acknowledged?.acknowledgedBy, "postgres-test-operator");
+
+    const resolved = await persistence.alarms.resolveByFingerprint(
+      input.fingerprint,
+      new Date(occurredAt.getTime() + 3_000),
+    );
+    assert.equal(resolved?.status, "RESOLVED");
+    assert.equal((await persistence.alarms.listActive()).some((alarm) => alarm.alarmId === first.alarmId), false);
+  } finally {
+    await persistence.close();
+  }
+});
+
 async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): Promise<void> {
   const stale = await persistence.database.query<{ mission_id: string }>(`
     SELECT mission_id
@@ -311,6 +360,7 @@ function createCore(
   clock: ManualClock,
 ): FleetCore {
   return new FleetCore({
+    alarms: persistence.alarms,
     missions: persistence.missions,
     missionQueue: persistence.missionQueue,
     robots: persistence.robots,
@@ -340,6 +390,7 @@ function createMultiRobotCore(
   clock: ManualClock,
 ): FleetCore {
   return new FleetCore({
+    alarms: persistence.alarms,
     missions: persistence.missions,
     missionQueue: persistence.missionQueue,
     robots: persistence.robots,

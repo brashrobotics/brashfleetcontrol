@@ -137,6 +137,42 @@ test("API exposes the prioritized automatic dispatch queue", async () => {
   await core.stop();
 });
 
+test("API lists and acknowledges operational alarms", async () => {
+  const { core, alarms, clock } = createTestFleetSystem();
+  await core.start();
+  const api = new FleetApi(core);
+  const raised = await alarms.raise({
+    fingerprint: "system:test-alarm",
+    code: "TEST_ALARM",
+    severity: "WARNING",
+    title: "Test operational alarm",
+    message: "Alarm lifecycle API test.",
+    sourceType: "SYSTEM",
+    sourceId: "fleet-core",
+    occurredAt: clock.now(),
+  });
+
+  const listResponse = await api.fetch(new Request("http://fleet.test/api/v1/alarms"));
+  assert.equal(listResponse.status, 200);
+  const list = await listResponse.json() as { summary: { open: number; alarms: Array<{ alarmId: string }> } };
+  assert.equal(list.summary.open, 1);
+  assert.equal(list.summary.alarms[0].alarmId, raised.alarmId);
+
+  const acknowledgeResponse = await api.fetch(new Request(
+    `http://fleet.test/api/v1/alarms/${raised.alarmId}/acknowledge`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operatorId: "operator-api", note: "Investigating" }),
+    },
+  ));
+  assert.equal(acknowledgeResponse.status, 200);
+  const acknowledged = await acknowledgeResponse.json() as { alarm: { status: string; acknowledgedBy: string } };
+  assert.equal(acknowledged.alarm.status, "ACKNOWLEDGED");
+  assert.equal(acknowledged.alarm.acknowledgedBy, "operator-api");
+  await core.stop();
+});
+
 test("API does not dispatch an external mission reference twice", async () => {
   const { core } = createTestFleetSystem();
   await core.start();

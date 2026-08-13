@@ -1,4 +1,6 @@
 import type {
+  AlarmRecord,
+  AlarmRepository,
   AssignmentDecisionRepository,
   CommandClaimOptions,
   CommandRepository,
@@ -13,9 +15,13 @@ import type {
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
+  RaiseAlarmInput,
   TrafficPlanRepository,
 } from "@brash/application";
 import type {
+  AlarmSeverity,
+  AlarmSourceType,
+  AlarmStatus,
   AssignmentDecision,
   CommandReceipt,
   MissionCommand,
@@ -107,6 +113,25 @@ interface MissionQueueRow {
   last_error: string | null;
   lease_owner: string | null;
   lease_expires_at: Date | null;
+}
+
+interface AlarmRow {
+  alarm_id: string;
+  fingerprint: string;
+  alarm_code: string;
+  severity: AlarmSeverity;
+  status: AlarmStatus;
+  title: string;
+  message: string;
+  source_type: AlarmSourceType;
+  source_id: string;
+  occurrence_count: number;
+  first_occurred_at: Date;
+  last_occurred_at: Date;
+  acknowledged_at: Date | null;
+  acknowledged_by: string | null;
+  acknowledgement_note: string | null;
+  resolved_at: Date | null;
 }
 
 interface MapTopologyRow {
@@ -379,6 +404,79 @@ export class PostgresMissionQueueRepository implements MissionQueueRepository {
           updated_at = $3
       WHERE mission_id = $1 AND status = 'PENDING'
     `, [missionId, outcome, completedAt]);
+  }
+}
+
+export class PostgresAlarmRepository implements AlarmRepository {
+  constructor(private readonly database: PostgresDatabase) {}
+
+  async raise(input: RaiseAlarmInput): Promise<AlarmRecord> {
+    const result = await this.database.query<AlarmRow>(`
+      INSERT INTO alarms (
+        fingerprint, alarm_code, severity, status, title, message,
+        source_type, source_id, first_occurred_at, last_occurred_at,
+        created_at, updated_at
+      ) VALUES ($1, $2, $3, 'OPEN', $4, $5, $6, $7, $8, $8, $8, $8)
+      ON CONFLICT (fingerprint) WHERE status <> 'RESOLVED' DO UPDATE SET
+        alarm_code = EXCLUDED.alarm_code,
+        severity = EXCLUDED.severity,
+        title = EXCLUDED.title,
+        message = EXCLUDED.message,
+        occurrence_count = alarms.occurrence_count + 1,
+        last_occurred_at = EXCLUDED.last_occurred_at,
+        updated_at = EXCLUDED.updated_at
+      RETURNING *
+    `, [
+      input.fingerprint,
+      input.code,
+      input.severity,
+      input.title,
+      input.message,
+      input.sourceType,
+      input.sourceId,
+      input.occurredAt,
+    ]);
+    return alarmFromRow(result.rows[0]);
+  }
+
+  async getById(alarmId: string): Promise<AlarmRecord | null> {
+    const numericId = parseAlarmId(alarmId);
+    if (numericId === null) return null;
+    const result = await this.database.query<AlarmRow>("SELECT * FROM alarms WHERE alarm_id = $1", [numericId]);
+    return result.rows[0] ? alarmFromRow(result.rows[0]) : null;
+  }
+
+  async listActive(): Promise<AlarmRecord[]> {
+    const result = await this.database.query<AlarmRow>(`
+      SELECT * FROM alarms
+      WHERE status <> 'RESOLVED'
+      ORDER BY CASE severity WHEN 'CRITICAL' THEN 3 WHEN 'WARNING' THEN 2 ELSE 1 END DESC,
+               last_occurred_at DESC, alarm_id DESC
+    `);
+    return result.rows.map(alarmFromRow);
+  }
+
+  async acknowledge(alarmId: string, operatorId: string, note: string | null, at: Date): Promise<AlarmRecord | null> {
+    const numericId = parseAlarmId(alarmId);
+    if (numericId === null) return null;
+    const result = await this.database.query<AlarmRow>(`
+      UPDATE alarms
+      SET status = 'ACKNOWLEDGED', acknowledged_at = $2,
+          acknowledged_by = $3, acknowledgement_note = $4, updated_at = $2
+      WHERE alarm_id = $1 AND status <> 'RESOLVED'
+      RETURNING *
+    `, [numericId, at, operatorId, note]);
+    return result.rows[0] ? alarmFromRow(result.rows[0]) : null;
+  }
+
+  async resolveByFingerprint(fingerprint: string, at: Date): Promise<AlarmRecord | null> {
+    const result = await this.database.query<AlarmRow>(`
+      UPDATE alarms
+      SET status = 'RESOLVED', resolved_at = $2, updated_at = $2
+      WHERE fingerprint = $1 AND status <> 'RESOLVED'
+      RETURNING *
+    `, [fingerprint, at]);
+    return result.rows[0] ? alarmFromRow(result.rows[0]) : null;
   }
 }
 
@@ -894,6 +992,32 @@ function missionQueueFromRow(row: MissionQueueRow): MissionQueueEntry {
     leaseOwner: row.lease_owner,
     leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
   };
+}
+
+function alarmFromRow(row: AlarmRow): AlarmRecord {
+  return {
+    alarmId: `ALARM-${row.alarm_id}`,
+    fingerprint: row.fingerprint,
+    code: row.alarm_code,
+    severity: row.severity,
+    status: row.status,
+    title: row.title,
+    message: row.message,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    occurrenceCount: row.occurrence_count,
+    firstOccurredAt: new Date(row.first_occurred_at),
+    lastOccurredAt: new Date(row.last_occurred_at),
+    acknowledgedAt: row.acknowledged_at ? new Date(row.acknowledged_at) : null,
+    acknowledgedBy: row.acknowledged_by,
+    acknowledgementNote: row.acknowledgement_note,
+    resolvedAt: row.resolved_at ? new Date(row.resolved_at) : null,
+  };
+}
+
+function parseAlarmId(alarmId: string): string | null {
+  const match = alarmId.match(/^ALARM-(\d+)$/);
+  return match?.[1] ?? null;
 }
 
 function trafficReservationFromRow(row: TrafficReservationRow): TrafficReservationSnapshot {

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.6.0
-  description: Vendor-independent mission queue, traffic reservation, robot liveness, recovery, and operator control API.
+  version: 0.7.0
+  description: Vendor-independent mission queue, alarms, traffic reservation, robot liveness, recovery, and operator control API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -45,6 +45,44 @@ paths:
                 required: [queue]
                 properties:
                   queue: { $ref: "#/components/schemas/DispatchQueue" }
+  /api/v1/alarms:
+    get:
+      operationId: getAlarms
+      responses:
+        "200":
+          description: Active operational alarms and severity summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [summary]
+                properties:
+                  summary: { $ref: "#/components/schemas/AlarmSummary" }
+  /api/v1/alarms/{alarmId}/acknowledge:
+    parameters:
+      - name: alarmId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1 }
+    post:
+      operationId: acknowledgeAlarm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlarmActionRequest" }
+      responses:
+        "200":
+          description: Alarm acknowledged by an operator
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alarm]
+                properties:
+                  alarm: { $ref: "#/components/schemas/Alarm" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/v1/maps:
     get:
       operationId: listMapTopologies
@@ -589,6 +627,47 @@ components:
         entries:
           type: array
           items: { $ref: "#/components/schemas/MissionQueueEntry" }
+    Alarm:
+      type: object
+      additionalProperties: false
+      required: [alarmId, fingerprint, code, severity, status, title, message, sourceType, sourceId, occurrenceCount, firstOccurredAt, lastOccurredAt, acknowledgedAt, acknowledgedBy, acknowledgementNote, resolvedAt]
+      properties:
+        alarmId: { type: string }
+        fingerprint: { type: string }
+        code: { type: string }
+        severity: { type: string, enum: [INFO, WARNING, CRITICAL] }
+        status: { type: string, enum: [OPEN, ACKNOWLEDGED, RESOLVED] }
+        title: { type: string }
+        message: { type: string }
+        sourceType: { type: string, enum: [ROBOT, MISSION, TRAFFIC, SYSTEM] }
+        sourceId: { type: string }
+        occurrenceCount: { type: integer, minimum: 1 }
+        firstOccurredAt: { type: string, format: date-time }
+        lastOccurredAt: { type: string, format: date-time }
+        acknowledgedAt: { type: [string, "null"], format: date-time }
+        acknowledgedBy: { type: [string, "null"] }
+        acknowledgementNote: { type: [string, "null"] }
+        resolvedAt: { type: [string, "null"], format: date-time }
+    AlarmSummary:
+      type: object
+      additionalProperties: false
+      required: [evaluatedAt, open, acknowledged, critical, warning, alarms]
+      properties:
+        evaluatedAt: { type: string, format: date-time }
+        open: { type: integer, minimum: 0 }
+        acknowledged: { type: integer, minimum: 0 }
+        critical: { type: integer, minimum: 0 }
+        warning: { type: integer, minimum: 0 }
+        alarms:
+          type: array
+          items: { $ref: "#/components/schemas/Alarm" }
+    AlarmActionRequest:
+      type: object
+      additionalProperties: false
+      required: [operatorId]
+      properties:
+        operatorId: { type: string, minLength: 1 }
+        note: { type: string, minLength: 1 }
     ErrorResponse:
       type: object
       required: [error]

@@ -7,6 +7,7 @@ import { SimulatorAdapter } from "@brash/simulator-adapter";
 import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import {
   InMemoryAssignmentDecisionRepository,
+  InMemoryAlarmRepository,
   InMemoryCommandRepository,
   InMemoryMissionEventRepository,
   InMemoryMissionQueueRepository,
@@ -52,6 +53,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     robotFixture({ robotId: "BR-RECOVERY-01" }),
   ], { now: () => clock.now() }));
   const dependencies = {
+    alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),
@@ -94,6 +96,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
 test("the outbox worker retries a due command without restarting Fleet Core", async () => {
   const clock = new ManualClock();
   const dependencies = {
+    alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),
@@ -140,6 +143,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
 test("startup reconciliation does not overwrite a durable reservation with stale available telemetry", async () => {
   const clock = new ManualClock();
   const shared = {
+    alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
     robots: new InMemoryRobotRepository(),

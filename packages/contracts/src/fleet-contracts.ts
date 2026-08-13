@@ -127,6 +127,43 @@ export interface DispatchQueueView {
   entries: MissionQueueEntryView[];
 }
 
+export type AlarmSeverity = "INFO" | "WARNING" | "CRITICAL";
+export type AlarmStatus = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+export type AlarmSourceType = "ROBOT" | "MISSION" | "TRAFFIC" | "SYSTEM";
+
+export interface AlarmView {
+  alarmId: string;
+  fingerprint: string;
+  code: string;
+  severity: AlarmSeverity;
+  status: AlarmStatus;
+  title: string;
+  message: string;
+  sourceType: AlarmSourceType;
+  sourceId: string;
+  occurrenceCount: number;
+  firstOccurredAt: string;
+  lastOccurredAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+  acknowledgementNote: string | null;
+  resolvedAt: string | null;
+}
+
+export interface AlarmSummaryView {
+  evaluatedAt: string;
+  open: number;
+  acknowledged: number;
+  critical: number;
+  warning: number;
+  alarms: AlarmView[];
+}
+
+export interface AlarmActionRequest {
+  operatorId: string;
+  note?: string;
+}
+
 export type MapNodeKind = "WAYPOINT" | "INTERSECTION" | "STATION" | "HOLDING_POINT";
 
 export interface MapNodeView {

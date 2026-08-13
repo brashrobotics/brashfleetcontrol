@@ -1,4 +1,4 @@
-import type { CreateMissionRequest, MissionLocation } from "./fleet-contracts.js";
+import type { AlarmActionRequest, CreateMissionRequest, MissionLocation } from "./fleet-contracts.js";
 
 export class ContractValidationError extends Error {
   readonly issues: string[];
@@ -99,3 +99,11 @@ export function parseCreateMissionRequest(value: unknown): CreateMissionRequest 
   };
 }
 
+export function parseAlarmActionRequest(value: unknown): AlarmActionRequest {
+  const issues: string[] = [];
+  if (!isRecord(value)) throw new ContractValidationError(["body must be an object."]);
+  const operatorId = nonEmptyString(value.operatorId, "operatorId", issues);
+  const note = value.note === undefined ? undefined : nonEmptyString(value.note, "note", issues);
+  if (issues.length > 0) throw new ContractValidationError(issues);
+  return { operatorId, ...(note ? { note } : {}) };
+}

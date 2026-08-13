@@ -36,6 +36,7 @@ const fallbackState = {
   traffic: { mapId: "plant-a@1", plans: [], reservations: [], updatedAt: new Date().toISOString() },
   recovery: { degradedRobots: 0, offlineRobots: 0, recoveryRequiredMissions: 0, safetyHolds: 0, nextLeaseExpiryAt: null },
   queue: { pendingMissions: 0, dueMissions: 0, leasedMissions: 0, nextAttemptAt: null, entries: [] },
+  alarmSummary: { open: 0, acknowledged: 0, critical: 0, warning: 0, alarms: [] },
 };
 
 const destinationStations = {
@@ -95,7 +96,7 @@ function missionProgress(stateName) {
   return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic, recovery, queue) {
+function adaptCoreSnapshot(snapshot, topology, traffic, recovery, queue, alarmSummary) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -130,13 +131,21 @@ function adaptCoreSnapshot(snapshot, topology, traffic, recovery, queue) {
       route: routesByMission.get(mission.missionId) ?? null,
       createdAt: new Date(mission.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
     })),
-    alerts: snapshot.missions
-      .filter((mission) => ["FAILED", "RECOVERY_REQUIRED"].includes(mission.state))
-      .map((mission) => ({ id: mission.missionId, level: "critical", robot: mission.assignedRobotId ?? "FLEET", message: mission.failureReason ?? "Mission requires recovery", time: new Date(mission.updatedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) })),
+    alerts: alarmSummary.alarms.map((alarm) => ({
+      id: alarm.alarmId,
+      level: alarm.severity.toLowerCase(),
+      robot: alarm.sourceId,
+      message: alarm.title,
+      detail: alarm.message,
+      status: alarm.status,
+      occurrenceCount: alarm.occurrenceCount,
+      time: new Date(alarm.lastOccurredAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+    })),
     topology,
     traffic,
     recovery,
     queue,
+    alarmSummary,
   };
 }
 
@@ -150,6 +159,7 @@ function normalizePreviewSnapshot(snapshot) {
     traffic: snapshot.traffic ?? traffic,
     recovery: snapshot.recovery ?? fallbackState.recovery,
     queue: snapshot.queue ?? fallbackState.queue,
+    alarmSummary: snapshot.alarmSummary ?? fallbackState.alarmSummary,
   };
 }
 
@@ -416,9 +426,9 @@ async function showMissionTimeline(missionId) {
 }
 
 function renderAlerts() {
-  $("#alert-count").textContent = state.alerts.length;
+  $("#alert-count").textContent = state.alarmSummary?.open ?? state.alerts.length;
   $("#alert-list").innerHTML = state.alerts.slice(0, 6).map((alert) => `
-    <article class="alert-item ${escapeHtml(alert.level)}"><i></i><div><strong>${escapeHtml(alert.robot)} · ${escapeHtml(alert.message)}</strong><p>${alert.level === "critical" ? "Operator action required" : alert.level === "warning" ? "Route needs attention" : "System notification"}</p></div><time>${escapeHtml(alert.time)}</time></article>`).join("") || '<p style="color:var(--muted);font-size:9px;padding:12px 0">No active events.</p>';
+    <article class="alert-item ${escapeHtml(alert.level)}"><i></i><div><strong>${escapeHtml(alert.robot)} · ${escapeHtml(alert.message)}</strong><p>${escapeHtml(alert.detail ?? (alert.level === "critical" ? "Operator action required" : "Operational condition"))}${alert.occurrenceCount > 1 ? ` · ${alert.occurrenceCount} occurrences` : ""}</p></div><div class="alert-meta"><time>${escapeHtml(alert.time)}</time>${fleetMode === "core" && alert.status === "OPEN" ? `<button data-ack-alarm="${escapeHtml(alert.id)}">Acknowledge</button>` : `<small>${escapeHtml(alert.status ?? "")}</small>`}</div></article>`).join("") || '<p style="color:var(--muted);font-size:9px;padding:12px 0">No active alarms.</p>';
 }
 
 function renderKpis() {
@@ -458,15 +468,16 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse, recoveryResponse, queueResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, recoveryResponse, queueResponse, alarmResponse] = await Promise.all([
     fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
     fetch("/api/v1/recovery/status", { cache: "no-store" }),
     fetch("/api/v1/dispatch/queue", { cache: "no-store" }),
+    fetch("/api/v1/alarms", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok || !recoveryResponse.ok || !queueResponse.ok) throw new Error("Fleet coordination state unavailable");
-  const [{ topology }, { schedule }, { recovery }, { queue }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), recoveryResponse.json(), queueResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule, recovery, queue);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !recoveryResponse.ok || !queueResponse.ok || !alarmResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { recovery }, { queue }, { summary }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), recoveryResponse.json(), queueResponse.json(), alarmResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, recovery, queue, summary);
   renderAll();
 }
 
@@ -596,6 +607,22 @@ $("#fit-map").addEventListener("click", () => applyZoom(1));
 $("#collapse-missions").addEventListener("click", () => $("#mission-drawer").classList.toggle("collapsed"));
 $("#show-all-missions").addEventListener("click", () => { $("#mission-drawer").classList.remove("collapsed"); $("#mission-drawer").scrollIntoView({ behavior: "smooth", block: "center" }); });
 $("#clear-events").addEventListener("click", () => { state.alerts = []; renderAlerts(); showToast("Event view cleared"); });
+$("#alert-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-ack-alarm]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await post(`/api/v1/alarms/${encodeURIComponent(button.dataset.ackAlarm)}/acknowledge`, {
+      operatorId: "dashboard-operator",
+      note: "Acknowledged from the Fleet Management dashboard",
+    });
+    showToast(`${button.dataset.ackAlarm} acknowledged`);
+    await refreshCoreSnapshot();
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
+  }
+});
 $("#notification-button").addEventListener("click", () => $(".alerts-card").scrollIntoView({ behavior: "smooth", block: "center" }));
 $("#plant-select").addEventListener("change", (event) => showToast(`Switched to ${event.target.value}`));
 $$('.rail-item[data-view]').forEach((button) => button.addEventListener("click", () => { $$('.rail-item[data-view]').forEach((item) => item.classList.toggle("active", item === button)); const view = button.dataset.view; if (view === "missions") $("#mission-drawer").scrollIntoView({ behavior: "smooth" }); else if (view === "robots") $("#robot-detail").scrollIntoView({ behavior: "smooth" }); else if (view === "analytics") showToast("The analytics module is planned for the second release"); else $("#map-stage").scrollIntoView({ behavior: "smooth", block: "center" }); }));

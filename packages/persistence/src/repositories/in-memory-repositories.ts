@@ -1,5 +1,7 @@
 import type {
   AssignmentDecisionRepository,
+  AlarmRecord,
+  AlarmRepository,
   CommandClaimOptions,
   CommandRepository,
   MissionEventRepository,
@@ -13,14 +15,99 @@ import type {
   PendingCommand,
   RepositoryReadOptions,
   RobotRepository,
+  RaiseAlarmInput,
   TrafficPlanRepository,
 } from "@brash/application";
 import type {
+  AlarmStatus,
   AssignmentDecision,
   CommandReceipt,
   MissionCommand,
   MissionEventView,
 } from "@brash/contracts";
+
+export class InMemoryAlarmRepository implements AlarmRepository {
+  private readonly alarms = new Map<string, AlarmRecord>();
+  private nextId = 0;
+
+  async raise(input: RaiseAlarmInput): Promise<AlarmRecord> {
+    const existing = [...this.alarms.values()].find((alarm) => alarm.fingerprint === input.fingerprint && alarm.status !== "RESOLVED");
+    if (existing) {
+      existing.code = input.code;
+      existing.severity = input.severity;
+      existing.title = input.title;
+      existing.message = input.message;
+      existing.occurrenceCount += 1;
+      existing.lastOccurredAt = new Date(input.occurredAt);
+      return cloneAlarm(existing);
+    }
+    const alarm: AlarmRecord = {
+      alarmId: `ALARM-${String(++this.nextId).padStart(4, "0")}`,
+      fingerprint: input.fingerprint,
+      code: input.code,
+      severity: input.severity,
+      status: "OPEN",
+      title: input.title,
+      message: input.message,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      occurrenceCount: 1,
+      firstOccurredAt: new Date(input.occurredAt),
+      lastOccurredAt: new Date(input.occurredAt),
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      acknowledgementNote: null,
+      resolvedAt: null,
+    };
+    this.alarms.set(alarm.alarmId, alarm);
+    return cloneAlarm(alarm);
+  }
+
+  async getById(alarmId: string): Promise<AlarmRecord | null> {
+    const alarm = this.alarms.get(alarmId);
+    return alarm ? cloneAlarm(alarm) : null;
+  }
+
+  async listActive(): Promise<AlarmRecord[]> {
+    return [...this.alarms.values()]
+      .filter((alarm) => alarm.status !== "RESOLVED")
+      .sort((left, right) => severityRank(right.severity) - severityRank(left.severity)
+        || right.lastOccurredAt.getTime() - left.lastOccurredAt.getTime())
+      .map(cloneAlarm);
+  }
+
+  async acknowledge(alarmId: string, operatorId: string, note: string | null, at: Date): Promise<AlarmRecord | null> {
+    const alarm = this.alarms.get(alarmId);
+    if (!alarm || alarm.status === "RESOLVED") return null;
+    alarm.status = "ACKNOWLEDGED";
+    alarm.acknowledgedAt = new Date(at);
+    alarm.acknowledgedBy = operatorId;
+    alarm.acknowledgementNote = note;
+    return cloneAlarm(alarm);
+  }
+
+  async resolveByFingerprint(fingerprint: string, at: Date): Promise<AlarmRecord | null> {
+    const alarm = [...this.alarms.values()].find((entry) => entry.fingerprint === fingerprint && entry.status !== "RESOLVED");
+    if (!alarm) return null;
+    alarm.status = "RESOLVED";
+    alarm.resolvedAt = new Date(at);
+    return cloneAlarm(alarm);
+  }
+}
+
+function cloneAlarm(alarm: AlarmRecord): AlarmRecord {
+  return {
+    ...alarm,
+    firstOccurredAt: new Date(alarm.firstOccurredAt),
+    lastOccurredAt: new Date(alarm.lastOccurredAt),
+    acknowledgedAt: alarm.acknowledgedAt ? new Date(alarm.acknowledgedAt) : null,
+    resolvedAt: alarm.resolvedAt ? new Date(alarm.resolvedAt) : null,
+  };
+}
+
+function severityRank(severity: "INFO" | "WARNING" | "CRITICAL"): number {
+  return ({ INFO: 1, WARNING: 2, CRITICAL: 3 })[severity];
+}
 import type {
   MapTopology,
   Mission,

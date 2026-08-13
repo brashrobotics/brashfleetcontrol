@@ -3,6 +3,7 @@ import { runPostgresMigrations } from "./migrations.js";
 import { PostgresDatabase } from "./postgres-database.js";
 import {
   PostgresAssignmentDecisionRepository,
+  PostgresAlarmRepository,
   PostgresCommandRepository,
   PostgresMapTopologyRepository,
   PostgresMissionQueueRepository,
@@ -15,6 +16,7 @@ import { PostgresTransactionManager } from "./postgres-transaction-manager.js";
 
 export class PostgresPersistence {
   readonly database: PostgresDatabase;
+  readonly alarms: PostgresAlarmRepository;
   readonly missions: PostgresMissionRepository;
   readonly missionQueue: PostgresMissionQueueRepository;
   readonly robots: PostgresRobotRepository;
@@ -29,6 +31,7 @@ export class PostgresPersistence {
   constructor(config: DatabaseConfig) {
     this.startupTimeoutMs = config.startupTimeoutMs;
     this.database = new PostgresDatabase(config);
+    this.alarms = new PostgresAlarmRepository(this.database);
     this.missions = new PostgresMissionRepository(this.database);
     this.missionQueue = new PostgresMissionQueueRepository(this.database);
     this.robots = new PostgresRobotRepository(this.database);

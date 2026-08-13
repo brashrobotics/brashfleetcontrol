@@ -1,4 +1,4 @@
-import { ContractValidationError, parseCreateMissionRequest } from "@brash/contracts";
+import { ContractValidationError, parseAlarmActionRequest, parseCreateMissionRequest } from "@brash/contracts";
 import { DomainError } from "@brash/domain";
 import type { FleetCore } from "@brash/application";
 
@@ -35,6 +35,21 @@ export class FleetApi {
 
       if (request.method === "GET" && url.pathname === "/api/v1/dispatch/queue") {
         return json({ queue: await this.core.getDispatchQueue() });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/v1/alarms") {
+        return json({ summary: await this.core.getAlarms() });
+      }
+
+      const alarmAcknowledgeMatch = url.pathname.match(/^\/api\/v1\/alarms\/([^/]+)\/acknowledge$/);
+      if (request.method === "POST" && alarmAcknowledgeMatch) {
+        const input = parseAlarmActionRequest(await request.json());
+        const alarm = await this.core.acknowledgeAlarm(
+          decodeURIComponent(alarmAcknowledgeMatch[1]),
+          input.operatorId,
+          input.note,
+        );
+        return json({ alarm });
       }
 
       if (request.method === "GET" && url.pathname === "/api/v1/maps") {

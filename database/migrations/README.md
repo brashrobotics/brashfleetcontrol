@@ -54,6 +54,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - Priority-aging inputs that prevent low-priority missions from waiting forever.
 - Backfill of missions that were already queued before the scheduler upgrade.
 
+`007_alarm_lifecycle.sql` adds:
+
+- Deduplicated operational alarms with severity and occurrence counters.
+- Operator acknowledgement identity, note, and timestamp.
+- Explicit resolution timestamps while retaining alarm history.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

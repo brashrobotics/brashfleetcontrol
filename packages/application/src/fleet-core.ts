@@ -1,5 +1,7 @@
 import {
   FLEET_SCHEMA_VERSION,
+  type AlarmSummaryView,
+  type AlarmView,
   type AssignmentDecision,
   type CommandReceipt,
   type CreateMissionRequest,
@@ -38,6 +40,8 @@ import {
 import type { Clock, IdGenerator } from "./ports/platform.js";
 import type {
   AssignmentDecisionRepository,
+  AlarmRecord,
+  AlarmRepository,
   CommandRepository,
   MissionEventRepository,
   MissionQueueEntry,
@@ -52,6 +56,7 @@ import type {
 import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
 
 export interface FleetCoreDependencies {
+  alarms: AlarmRepository;
   missions: MissionRepository;
   missionQueue: MissionQueueRepository;
   robots: RobotRepository;
@@ -439,6 +444,16 @@ export class FleetCore {
       await this.dependencies.transactions.runExclusive(async () => {
         const mission = await this.requireMission(missionId, true);
         if (mission.state !== "CANCELLING") return;
+        await this.dependencies.alarms.raise({
+          fingerprint: `mission-cancellation:${mission.missionId}`,
+          code: "MISSION_CANCELLATION_DELIVERY_FAILED",
+          severity: "WARNING",
+          title: `${mission.missionId} cancellation not delivered`,
+          message: error instanceof Error ? error.message : "Robot adapter could not receive the cancellation request.",
+          sourceType: "MISSION",
+          sourceId: mission.missionId,
+          occurredAt: failedAt,
+        });
         await this.appendMissionEvent(
           mission,
           "MISSION_CANCELLATION_DELIVERY_FAILED",
@@ -453,6 +468,16 @@ export class FleetCore {
       await this.dependencies.transactions.runExclusive(async () => {
         const mission = await this.requireMission(missionId, true);
         if (mission.state !== "CANCELLING") return;
+        await this.dependencies.alarms.raise({
+          fingerprint: `mission-cancellation:${mission.missionId}`,
+          code: "MISSION_CANCELLATION_REJECTED",
+          severity: "WARNING",
+          title: `${mission.missionId} cancellation rejected`,
+          message: receipt?.reason ?? "Robot rejected the cancellation request.",
+          sourceType: "MISSION",
+          sourceId: mission.missionId,
+          occurredAt: rejectedAt,
+        });
         await this.appendMissionEvent(
           mission,
           "MISSION_CANCELLATION_REJECTED",
@@ -488,6 +513,30 @@ export class FleetCore {
         : null,
       entries: entries.map((entry) => this.missionQueueEntryToView(entry)),
     };
+  }
+
+  async getAlarms(): Promise<AlarmSummaryView> {
+    const evaluatedAt = this.dependencies.clock.now();
+    const alarms = await this.dependencies.alarms.listActive();
+    return {
+      evaluatedAt: evaluatedAt.toISOString(),
+      open: alarms.filter((alarm) => alarm.status === "OPEN").length,
+      acknowledged: alarms.filter((alarm) => alarm.status === "ACKNOWLEDGED").length,
+      critical: alarms.filter((alarm) => alarm.severity === "CRITICAL").length,
+      warning: alarms.filter((alarm) => alarm.severity === "WARNING").length,
+      alarms: alarms.map((alarm) => this.alarmToView(alarm)),
+    };
+  }
+
+  async acknowledgeAlarm(alarmId: string, operatorId: string, note?: string): Promise<AlarmView> {
+    const alarm = await this.dependencies.alarms.acknowledge(
+      alarmId,
+      operatorId,
+      note ?? null,
+      this.dependencies.clock.now(),
+    );
+    if (!alarm) throw new DomainError("ALARM_NOT_ACTIVE", `Alarm ${alarmId} was not found or is already resolved.`);
+    return this.alarmToView(alarm);
   }
 
   async getMissionEvents(missionId: string): Promise<MissionEventView[]> {
@@ -566,6 +615,18 @@ export class FleetCore {
           ? await this.dependencies.missions.getById(robot.activeMissionId, { forUpdate: true })
           : null;
 
+        if (connectionChanged && liveness.connection === "DEGRADED") {
+          await this.dependencies.alarms.raise({
+            fingerprint: `robot-heartbeat-degraded:${robot.robotId}`,
+            code: "ROBOT_HEARTBEAT_DEGRADED",
+            severity: "WARNING",
+            title: `${robot.robotId} heartbeat delayed`,
+            message: `No current heartbeat has been received from ${robot.displayName}.`,
+            sourceType: "ROBOT",
+            sourceId: robot.robotId,
+            occurredAt: now,
+          });
+        }
         if (connectionChanged && mission && liveness.connection === "DEGRADED") {
           await this.appendMissionEvent(
             mission,
@@ -574,6 +635,22 @@ export class FleetCore {
             now,
             { heartbeatAgeMs: liveness.ageMs, lastSeenAt: robot.lastSeenAt.toISOString() },
           );
+        }
+
+        if (connectionChanged && liveness.connection === "OFFLINE") {
+          await this.dependencies.alarms.resolveByFingerprint(`robot-heartbeat-degraded:${robot.robotId}`, now);
+          await this.dependencies.alarms.raise({
+            fingerprint: `robot-offline:${robot.robotId}`,
+            code: "ROBOT_OFFLINE",
+            severity: "CRITICAL",
+            title: `${robot.robotId} is offline`,
+            message: mission
+              ? `${robot.displayName} exceeded the heartbeat timeout while owning ${mission.missionId}.`
+              : `${robot.displayName} exceeded the heartbeat timeout.`,
+            sourceType: "ROBOT",
+            sourceId: robot.robotId,
+            occurredAt: now,
+          });
         }
 
         if (liveness.connection === "OFFLINE" && mission) {
@@ -588,6 +665,16 @@ export class FleetCore {
           }
           if (["ASSIGNED", "DISPATCHED", "EXECUTING"].includes(mission.state)) {
             mission.requireRecovery(`Robot ${robot.robotId} is offline; operator safety recovery is required.`, now);
+            await this.dependencies.alarms.raise({
+              fingerprint: `mission-recovery:${mission.missionId}`,
+              code: "MISSION_RECOVERY_REQUIRED",
+              severity: "CRITICAL",
+              title: `${mission.missionId} requires recovery`,
+              message: `Mission ownership is uncertain because ${robot.robotId} is offline.`,
+              sourceType: "MISSION",
+              sourceId: mission.missionId,
+              occurredAt: now,
+            });
             await this.dependencies.commands.deferPendingByMission(
               mission.missionId,
               new Date(now.getTime() + 24 * 60 * 60_000),
@@ -614,7 +701,15 @@ export class FleetCore {
               );
             }
           }
-        } else if (liveness.connection === "ONLINE" && mission && mission.state !== "RECOVERY_REQUIRED") {
+        } else if (liveness.connection === "ONLINE") {
+          if (connectionChanged) {
+            await this.dependencies.alarms.resolveByFingerprint(`robot-heartbeat-degraded:${robot.robotId}`, now);
+            await this.dependencies.alarms.resolveByFingerprint(`robot-offline:${robot.robotId}`, now);
+          }
+          if (!mission || mission.state === "RECOVERY_REQUIRED") {
+            if (connectionChanged) await this.dependencies.robots.save(robot);
+            return connectionChanged || mission?.state === "RECOVERY_REQUIRED";
+          }
           const route = await this.dependencies.traffic.getByMission(mission.missionId);
           if (
             route?.status === "ACTIVE"
@@ -718,11 +813,17 @@ export class FleetCore {
         }, receivedAt);
         if (!applied) return;
 
+        if (event.state.connection === "ONLINE") {
+          await this.dependencies.alarms.resolveByFingerprint(`robot-heartbeat-degraded:${robot.robotId}`, receivedAt);
+          await this.dependencies.alarms.resolveByFingerprint(`robot-offline:${robot.robotId}`, receivedAt);
+        }
+
         if (previousMissionId && event.state.connection === "ONLINE") {
           const mission = await this.dependencies.missions.getById(previousMissionId, { forUpdate: true });
           if (mission?.state === "RECOVERY_REQUIRED") {
             if (event.state.activeMissionId === previousMissionId) {
               mission.resumeRecovery(receivedAt);
+              await this.dependencies.alarms.resolveByFingerprint(`mission-recovery:${mission.missionId}`, receivedAt);
               await this.dependencies.commands.resumePendingByMission(mission.missionId, receivedAt);
               await this.dependencies.traffic.acknowledgeSafetyHoldByMission(
                 mission.missionId,
@@ -740,6 +841,7 @@ export class FleetCore {
               const previousRobotId = mission.assignedRobotId;
               const previousCommandId = mission.commandId;
               mission.requeueAfterRecovery("Robot confirmed that the previous command is no longer active.", receivedAt);
+              await this.dependencies.alarms.resolveByFingerprint(`mission-recovery:${mission.missionId}`, receivedAt);
               await this.dependencies.missionQueue.enqueue(mission.missionId, mission.priority, receivedAt);
               await this.dependencies.commands.cancelPendingByMission(
                 mission.missionId,
@@ -776,6 +878,7 @@ export class FleetCore {
 
       if (mission.state === "RECOVERY_REQUIRED") {
         mission.resumeRecovery(observedAt);
+        await this.dependencies.alarms.resolveByFingerprint(`mission-recovery:${mission.missionId}`, observedAt);
         await this.dependencies.commands.resumePendingByMission(mission.missionId, observedAt);
         await this.dependencies.traffic.acknowledgeSafetyHoldByMission(
           mission.missionId,
@@ -813,11 +916,13 @@ export class FleetCore {
         }
       } else if (event.status === "COMPLETED") {
         mission.complete(event.commandId, observedAt);
+        await this.dependencies.alarms.resolveByFingerprint(`mission-cancellation:${mission.missionId}`, observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(mission, "MISSION_COMPLETED", "Robot completed the mission.", observedAt);
         await this.releaseTrafficPlan(mission, observedAt, "Mission completed; traffic reservations released.");
       } else if (event.status === "FAILED") {
         mission.fail(event.commandId, event.reason ?? "Robot reported mission failure.", observedAt);
+        await this.dependencies.alarms.resolveByFingerprint(`mission-cancellation:${mission.missionId}`, observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(
           mission,
@@ -829,6 +934,7 @@ export class FleetCore {
       } else {
         if (mission.state !== "CANCELLING") mission.requestCancellation(observedAt);
         mission.cancel(event.commandId, observedAt);
+        await this.dependencies.alarms.resolveByFingerprint(`mission-cancellation:${mission.missionId}`, observedAt);
         robot.release(event.missionId, observedAt);
         await this.appendMissionEvent(mission, "MISSION_CANCELLED", "Mission cancellation confirmed.", observedAt);
         await this.releaseTrafficPlan(mission, observedAt, "Mission cancelled; traffic reservations released.");
@@ -911,6 +1017,16 @@ export class FleetCore {
           new Date(attemptedAt.getTime() + this.retryDelayMs(pending.attemptCount + 1)),
         );
         const currentMission = await this.requireMission(command.missionId, true);
+        await this.dependencies.alarms.raise({
+          fingerprint: `command-delivery:${currentMission.missionId}`,
+          code: "COMMAND_DELIVERY_FAILED",
+          severity: "WARNING",
+          title: `${currentMission.missionId} command delivery failed`,
+          message: reason,
+          sourceType: "MISSION",
+          sourceId: currentMission.missionId,
+          occurredAt: attemptedAt,
+        });
         await this.appendMissionEvent(
           currentMission,
           "COMMAND_DELIVERY_FAILED",
@@ -930,6 +1046,7 @@ export class FleetCore {
       const now = this.dependencies.clock.now();
 
       if (receipt.status === "ACCEPTED") {
+        await this.dependencies.alarms.resolveByFingerprint(`command-delivery:${currentMission.missionId}`, now);
         if (currentMission.state === "ASSIGNED") {
           currentMission.markDispatched(command.commandId, now);
           await this.appendMissionEvent(
@@ -1004,6 +1121,27 @@ export class FleetCore {
       lastError: entry.lastError,
       leaseOwner: entry.leaseOwner,
       leaseExpiresAt: entry.leaseExpiresAt?.toISOString() ?? null,
+    };
+  }
+
+  private alarmToView(alarm: AlarmRecord): AlarmView {
+    return {
+      alarmId: alarm.alarmId,
+      fingerprint: alarm.fingerprint,
+      code: alarm.code,
+      severity: alarm.severity,
+      status: alarm.status,
+      title: alarm.title,
+      message: alarm.message,
+      sourceType: alarm.sourceType,
+      sourceId: alarm.sourceId,
+      occurrenceCount: alarm.occurrenceCount,
+      firstOccurredAt: alarm.firstOccurredAt.toISOString(),
+      lastOccurredAt: alarm.lastOccurredAt.toISOString(),
+      acknowledgedAt: alarm.acknowledgedAt?.toISOString() ?? null,
+      acknowledgedBy: alarm.acknowledgedBy,
+      acknowledgementNote: alarm.acknowledgementNote,
+      resolvedAt: alarm.resolvedAt?.toISOString() ?? null,
     };
   }
 

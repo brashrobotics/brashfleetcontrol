@@ -1,4 +1,7 @@
 import type {
+  AlarmSeverity,
+  AlarmSourceType,
+  AlarmStatus,
   AssignmentDecision,
   CommandReceipt,
   MissionCommand,
@@ -54,6 +57,44 @@ export interface MissionQueueRepository {
   listPending(now: Date, agingIntervalMs: number): Promise<MissionQueueEntry[]>;
   defer(missionId: string, attemptedAt: Date, nextAttemptAt: Date, reason: string): Promise<void>;
   complete(missionId: string, outcome: MissionQueueOutcome, completedAt: Date): Promise<void>;
+}
+
+export interface AlarmRecord {
+  alarmId: string;
+  fingerprint: string;
+  code: string;
+  severity: AlarmSeverity;
+  status: AlarmStatus;
+  title: string;
+  message: string;
+  sourceType: AlarmSourceType;
+  sourceId: string;
+  occurrenceCount: number;
+  firstOccurredAt: Date;
+  lastOccurredAt: Date;
+  acknowledgedAt: Date | null;
+  acknowledgedBy: string | null;
+  acknowledgementNote: string | null;
+  resolvedAt: Date | null;
+}
+
+export interface RaiseAlarmInput {
+  fingerprint: string;
+  code: string;
+  severity: AlarmSeverity;
+  title: string;
+  message: string;
+  sourceType: AlarmSourceType;
+  sourceId: string;
+  occurredAt: Date;
+}
+
+export interface AlarmRepository {
+  raise(input: RaiseAlarmInput): Promise<AlarmRecord>;
+  getById(alarmId: string): Promise<AlarmRecord | null>;
+  listActive(): Promise<AlarmRecord[]>;
+  acknowledge(alarmId: string, operatorId: string, note: string | null, at: Date): Promise<AlarmRecord | null>;
+  resolveByFingerprint(fingerprint: string, at: Date): Promise<AlarmRecord | null>;
 }
 
 export interface RobotRepository {

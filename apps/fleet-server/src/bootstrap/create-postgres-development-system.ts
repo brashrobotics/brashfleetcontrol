@@ -19,6 +19,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
     await persistence.maps.save(createDefaultPlantTopology());
     const adapter = createDevelopmentAdapter();
     const core = new FleetCore({
+      alarms: persistence.alarms,
       missions: persistence.missions,
       missionQueue: persistence.missionQueue,
       robots: persistence.robots,
