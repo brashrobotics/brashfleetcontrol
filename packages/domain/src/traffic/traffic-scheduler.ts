@@ -2,8 +2,8 @@ import type { MapTopology, RouteTraversal } from "../map/map-topology.js";
 import { DomainError } from "../shared/domain-error.js";
 
 export type RoutePhase = "TO_PICKUP" | "TO_DROPOFF";
-export type TrafficPlanStatus = "ACTIVE" | "RELEASED";
-export type TrafficReservationState = "ACTIVE" | "RELEASED";
+export type TrafficPlanStatus = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
+export type TrafficReservationState = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
 export type TrafficResourceType = "EDGE" | "NODE";
 
 export interface TrafficRouteSegment {
@@ -49,6 +49,8 @@ export interface TrafficPlanSnapshot {
   segments: TrafficRouteSegment[];
   reservations: TrafficReservationSnapshot[];
   plannedAt: Date;
+  lastRenewedAt: Date;
+  leaseExpiresAt: Date;
   releasedAt: Date | null;
 }
 
@@ -69,6 +71,7 @@ export interface TrafficSchedulerOptions {
   clearanceMs?: number;
   nodeHoldMs?: number;
   maximumDelayMs?: number;
+  reservationLeaseMs?: number;
 }
 
 interface PhasedTraversal extends RouteTraversal {
@@ -86,11 +89,13 @@ export class TrafficScheduler {
   private readonly clearanceMs: number;
   private readonly nodeHoldMs: number;
   private readonly maximumDelayMs: number;
+  private readonly reservationLeaseMs: number;
 
   constructor(options: TrafficSchedulerOptions = {}) {
     this.clearanceMs = options.clearanceMs ?? 1_000;
     this.nodeHoldMs = options.nodeHoldMs ?? 1_000;
     this.maximumDelayMs = options.maximumDelayMs ?? 30 * 60_000;
+    this.reservationLeaseMs = options.reservationLeaseMs ?? 45_000;
   }
 
   schedule(input: ScheduleTrafficInput): TrafficPlanSnapshot {
@@ -157,6 +162,8 @@ export class TrafficScheduler {
       segments: segments.map((segment) => ({ ...segment, enterAt: new Date(segment.enterAt), exitAt: new Date(segment.exitAt) })),
       reservations,
       plannedAt: new Date(input.plannedAt),
+      lastRenewedAt: new Date(input.plannedAt),
+      leaseExpiresAt: new Date(input.plannedAt.getTime() + this.reservationLeaseMs),
       releasedAt: null,
     };
   }
@@ -211,7 +218,7 @@ export class TrafficScheduler {
     let requiredShift = 0;
     for (const window of windows) {
       for (const existing of existingReservations) {
-        if (existing.state !== "ACTIVE" || existing.resourceId !== window.resourceId) continue;
+        if ((existing.state !== "ACTIVE" && existing.state !== "SAFETY_HOLD") || existing.resourceId !== window.resourceId) continue;
         if (!overlaps(window.startsAt, window.endsAt, existing.startsAt, existing.endsAt)) continue;
         requiredShift = Math.max(requiredShift, existing.endsAt.getTime() - window.startsAt.getTime());
       }

@@ -16,6 +16,9 @@ Coordinates planned use of shared factory space and infrastructure resources.
 - Releases reservations when a mission completes, fails, is cancelled, or its
   command is rejected.
 - Exposes map schedules and per-mission routes through `/api/v1`.
+- Renews route leases while the assigned robot remains healthy.
+- Converts active reservations to non-expiring safety holds when heartbeat
+  expiry makes the robot's physical position uncertain.
 
 The full-route policy is deliberately conservative: because a mission owns its
 complete path before dispatch, it cannot enter a hold-and-wait cycle with
@@ -24,8 +27,8 @@ current graph model.
 
 ## Next responsibilities
 
-Add priority preemption, lease renewal, offline-robot recovery, rolling-horizon
-planning, infrastructure reservations, and topology-aware rerouting.
+Add priority preemption, rolling-horizon planning, infrastructure reservations,
+operator recovery controls, and topology-aware rerouting.
 
 ## Boundaries
 

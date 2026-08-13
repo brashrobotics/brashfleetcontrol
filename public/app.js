@@ -34,6 +34,7 @@ const fallbackState = {
   alerts: [],
   topology: structuredClone(fallbackTopology),
   traffic: { mapId: "plant-a@1", plans: [], reservations: [], updatedAt: new Date().toISOString() },
+  recovery: { degradedRobots: 0, offlineRobots: 0, recoveryRequiredMissions: 0, safetyHolds: 0, nextLeaseExpiryAt: null },
 };
 
 const destinationStations = {
@@ -73,7 +74,8 @@ function clampMapCoordinate(value, minimum = 8, maximum = 92) {
 }
 
 function coreRobotStatus(robot) {
-  if (robot.state.connection !== "ONLINE") return "stopped";
+  if (robot.state.connection === "OFFLINE") return "stopped";
+  if (robot.state.connection === "DEGRADED") return "blocked";
   if (robot.state.availability === "CHARGING") return "charging";
   if (["ERROR", "MANUAL"].includes(robot.state.availability)) return "blocked";
   if (["RESERVED", "EXECUTING"].includes(robot.state.availability)) return "moving";
@@ -81,17 +83,17 @@ function coreRobotStatus(robot) {
 }
 
 function missionStatus(stateName) {
-  if (["FAILED", "CANCELLED"].includes(stateName)) return "blocked";
+  if (["FAILED", "CANCELLED", "RECOVERY_REQUIRED"].includes(stateName)) return "blocked";
   if (["COMPLETED"].includes(stateName)) return "completed";
   if (stateName === "QUEUED") return "queued";
   return "active";
 }
 
 function missionProgress(stateName) {
-  return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
+  return ({ QUEUED: 5, ASSIGNED: 15, DISPATCHED: 35, EXECUTING: 65, RECOVERY_REQUIRED: 65, CANCELLING: 80, COMPLETED: 100, FAILED: 0, CANCELLED: 0 })[stateName] ?? 0;
 }
 
-function adaptCoreSnapshot(snapshot, topology, traffic) {
+function adaptCoreSnapshot(snapshot, topology, traffic, recovery) {
   const activeMissions = new Map(snapshot.missions.filter((mission) => mission.assignedRobotId).map((mission) => [mission.assignedRobotId, mission]));
   const routesByMission = new Map(traffic.plans.map((plan) => [plan.missionId, plan]));
   return {
@@ -111,6 +113,8 @@ function adaptCoreSnapshot(snapshot, topology, traffic) {
         capabilities: robot.capabilities.actions,
         mapId: robot.state.pose.mapId,
         rawPose: { x: robot.state.pose.x, y: robot.state.pose.y },
+        connection: robot.state.connection,
+        lastSeenAt: robot.state.lastSeenAt ?? robot.state.observedAt,
       };
     }),
     missions: snapshot.missions.map((mission) => ({
@@ -125,10 +129,11 @@ function adaptCoreSnapshot(snapshot, topology, traffic) {
       createdAt: new Date(mission.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
     })),
     alerts: snapshot.missions
-      .filter((mission) => mission.state === "FAILED")
-      .map((mission) => ({ id: mission.missionId, level: "critical", robot: mission.assignedRobotId ?? "FLEET", message: mission.failureReason ?? "Mission failed", time: new Date(mission.updatedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) })),
+      .filter((mission) => ["FAILED", "RECOVERY_REQUIRED"].includes(mission.state))
+      .map((mission) => ({ id: mission.missionId, level: "critical", robot: mission.assignedRobotId ?? "FLEET", message: mission.failureReason ?? "Mission requires recovery", time: new Date(mission.updatedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) })),
     topology,
     traffic,
+    recovery,
   };
 }
 
@@ -140,6 +145,7 @@ function normalizePreviewSnapshot(snapshot) {
     missions: (snapshot.missions ?? []).map((mission) => ({ ...mission, route: routesByMission.get(mission.id) ?? null })),
     topology: snapshot.topology ?? structuredClone(fallbackTopology),
     traffic: snapshot.traffic ?? traffic,
+    recovery: snapshot.recovery ?? fallbackState.recovery,
   };
 }
 
@@ -244,7 +250,7 @@ function renderTrafficTopology() {
   const nodes = new Map(topology.nodes.map((node) => [node.nodeId, node]));
   const reservationsByEdge = new Map();
   for (const reservation of state.traffic?.reservations ?? []) {
-    if (reservation.state !== "ACTIVE" || reservation.resourceType !== "EDGE") continue;
+    if (!["ACTIVE", "SAFETY_HOLD"].includes(reservation.state) || reservation.resourceType !== "EDGE") continue;
     const edgeId = reservation.resourceId.replace(/^edge:/, "");
     const entries = reservationsByEdge.get(edgeId) ?? [];
     entries.push(reservation);
@@ -268,15 +274,16 @@ function renderTrafficTopology() {
 
     const reservations = reservationsByEdge.get(edge.edgeId) ?? [];
     if (!reservations.length) continue;
+    const isSafetyHold = reservations.some((reservation) => reservation.state === "SAFETY_HOLD");
     const isUpcoming = reservations.every((reservation) => new Date(reservation.startsAt).getTime() > Date.now());
     context.beginPath();
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
-    context.strokeStyle = isUpcoming ? "rgba(242, 184, 75, .95)" : "rgba(200, 240, 61, .95)";
+    context.strokeStyle = isSafetyHold ? "rgba(255, 105, 95, .98)" : isUpcoming ? "rgba(242, 184, 75, .95)" : "rgba(200, 240, 61, .95)";
     context.lineWidth = 4;
     context.setLineDash([]);
     context.shadowBlur = 10;
-    context.shadowColor = isUpcoming ? "rgba(242, 184, 75, .45)" : "rgba(200, 240, 61, .45)";
+    context.shadowColor = isSafetyHold ? "rgba(255, 105, 95, .55)" : isUpcoming ? "rgba(242, 184, 75, .45)" : "rgba(200, 240, 61, .45)";
     context.stroke();
     context.shadowBlur = 0;
   }
@@ -288,24 +295,30 @@ function renderTrafficTopology() {
 }
 
 function renderTrafficSchedule() {
-  const plans = (state.traffic?.plans ?? []).filter((plan) => plan.status === "ACTIVE");
-  const reservations = (state.traffic?.reservations ?? []).filter((reservation) => reservation.state === "ACTIVE");
+  const plans = (state.traffic?.plans ?? []).filter((plan) => ["ACTIVE", "SAFETY_HOLD"].includes(plan.status));
+  const reservations = (state.traffic?.reservations ?? []).filter((reservation) => ["ACTIVE", "SAFETY_HOLD"].includes(reservation.state));
+  const safetyHolds = plans.filter((plan) => plan.status === "SAFETY_HOLD");
   $("#active-route-count").textContent = plans.length;
   $("#reserved-resource-count").textContent = new Set(reservations.map((reservation) => reservation.resourceId)).size;
-  $("#traffic-delay").textContent = `${Math.round(Math.max(0, ...plans.map((plan) => plan.totalWaitSeconds ?? 0)))}s`;
+  $("#traffic-hold-count").textContent = safetyHolds.length;
   $("#traffic-plan-list").innerHTML = plans
     .sort((left, right) => new Date(left.scheduledStartAt) - new Date(right.scheduledStartAt))
     .slice(0, 4)
     .map((plan) => `
-      <article class="traffic-plan ${plan.totalWaitSeconds > 0 ? "delayed" : ""}">
+      <article class="traffic-plan ${plan.status === "SAFETY_HOLD" ? "safety-hold" : plan.totalWaitSeconds > 0 ? "delayed" : ""}">
         <i></i><div><strong>${escapeHtml(plan.robotId)}</strong><p>${escapeHtml(plan.routeId)}</p></div>
-        <div><time>${escapeHtml(formatShortTime(plan.scheduledStartAt))}</time><small>${plan.totalWaitSeconds > 0 ? `+${Math.round(plan.totalWaitSeconds)}s wait` : "reserved"}</small></div>
+        <div><time>${escapeHtml(formatShortTime(plan.scheduledStartAt))}</time><small>${plan.status === "SAFETY_HOLD" ? "SAFETY HOLD" : plan.totalWaitSeconds > 0 ? `+${Math.round(plan.totalWaitSeconds)}s wait` : "reserved"}</small></div>
       </article>`).join("") || '<p class="traffic-empty">No active traffic reservations.</p>';
 }
 
 function formatShortTime(value) {
   if (!value) return "—";
   return new Date(value).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatAge(value) {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1_000));
+  return seconds < 2 ? "now" : seconds < 60 ? `${seconds}s ago` : `${Math.floor(seconds / 60)}m ago`;
 }
 
 function selectRobot(id) {
@@ -331,6 +344,9 @@ function renderRobotDetail() {
   $("#detail-battery").textContent = `${Math.round(robot.battery)}%`;
   $("#battery-progress").style.width = `${robot.battery}%`;
   $("#detail-speed").innerHTML = `${Number(robot.speed).toFixed(1)} <small>m/s</small>`;
+  $("#detail-connection").textContent = robot.connection ?? (robot.status === "stopped" ? "OFFLINE" : "ONLINE");
+  $("#detail-connection").className = robot.connection === "OFFLINE" ? "critical-text" : robot.connection === "DEGRADED" ? "warning-text" : "good";
+  $("#detail-last-seen").textContent = robot.lastSeenAt ? `Heartbeat ${formatAge(robot.lastSeenAt)}` : "Heartbeat unavailable";
   const isCore = fleetMode === "core";
   $("#stop-button").textContent = isCore ? "■ Controlled stop unavailable" : robot.status === "stopped" ? "▶ Resume operation" : "■ Controlled stop";
   $("#stop-button").classList.toggle("secondary-button", isCore || robot.status === "stopped");
@@ -394,11 +410,18 @@ function renderKpis() {
   const waiting = state.robots.filter((robot) => ["idle", "charging"].includes(robot.status)).length;
   const attention = state.robots.filter((robot) => ["blocked", "stopped"].includes(robot.status)).length;
   $("#active-count").textContent = state.robots.length;
-  $("#online-count").textContent = state.robots.filter((robot) => robot.status !== "stopped").length;
+  $("#online-count").textContent = state.robots.filter((robot) => robot.connection ? robot.connection === "ONLINE" : robot.status !== "stopped").length;
   $("#moving-count").textContent = moving;
   $("#idle-count").textContent = waiting;
   $("#attention-count").textContent = attention;
   $("#attention-note").textContent = attention ? "Review robot state" : "Fleet nominal";
+  const recovery = state.recovery ?? fallbackState.recovery;
+  $("#safety-hold-count").textContent = recovery.safetyHolds ?? 0;
+  $("#recovery-note").textContent = recovery.recoveryRequiredMissions
+    ? `${recovery.recoveryRequiredMissions} mission recovery required`
+    : recovery.degradedRobots
+      ? `${recovery.degradedRobots} heartbeat degraded`
+      : "No recovery required";
   $(".segmented [data-filter='all'] b").textContent = state.robots.length;
 }
 
@@ -419,13 +442,14 @@ async function refreshCoreSnapshot() {
   if (!response.ok) throw new Error("Fleet Core snapshot unavailable");
   const snapshot = await response.json();
   const mapId = snapshot.robots[0]?.state?.pose?.mapId ?? snapshot.missions[0]?.pickup?.mapId ?? "plant-a@1";
-  const [topologyResponse, scheduleResponse] = await Promise.all([
+  const [topologyResponse, scheduleResponse, recoveryResponse] = await Promise.all([
     fetch(`/api/v1/maps/${encodeURIComponent(mapId)}/topology`, { cache: "no-store" }),
     fetch(`/api/v1/traffic/schedule?mapId=${encodeURIComponent(mapId)}`, { cache: "no-store" }),
+    fetch("/api/v1/recovery/status", { cache: "no-store" }),
   ]);
-  if (!topologyResponse.ok || !scheduleResponse.ok) throw new Error("Traffic scheduler state unavailable");
-  const [{ topology }, { schedule }] = await Promise.all([topologyResponse.json(), scheduleResponse.json()]);
-  state = adaptCoreSnapshot(snapshot, topology, schedule);
+  if (!topologyResponse.ok || !scheduleResponse.ok || !recoveryResponse.ok) throw new Error("Fleet coordination state unavailable");
+  const [{ topology }, { schedule }, { recovery }] = await Promise.all([topologyResponse.json(), scheduleResponse.json(), recoveryResponse.json()]);
+  state = adaptCoreSnapshot(snapshot, topology, schedule, recovery);
   renderAll();
 }
 

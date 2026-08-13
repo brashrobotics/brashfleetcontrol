@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.3.0
-  description: Vendor-independent mission, dispatch, map topology, and traffic reservation API.
+  version: 0.4.0
+  description: Vendor-independent mission, traffic reservation, robot liveness, and recovery API.
 servers:
   - url: http://127.0.0.1:4273
 paths:
@@ -84,6 +84,19 @@ paths:
                   schedule: { $ref: "#/components/schemas/TrafficSchedule" }
         "400":
           $ref: "#/components/responses/BadRequest"
+  /api/v1/recovery/status:
+    get:
+      operationId: getFleetRecoveryStatus
+      responses:
+        "200":
+          description: Fleet heartbeat, recovery, and traffic lease summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recovery]
+                properties:
+                  recovery: { $ref: "#/components/schemas/FleetRecoveryStatus" }
   /api/v1/missions:
     post:
       operationId: createMission
@@ -242,6 +255,8 @@ components:
         - createdAt
         - updatedAt
         - failureReason
+        - recoveryPreviousState
+        - recoveryStartedAt
       properties:
         missionId: { type: string }
         type: { const: TRANSPORT }
@@ -255,12 +270,14 @@ components:
         dropoff: { $ref: "#/components/schemas/Location" }
         state:
           type: string
-          enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, CANCELLING, CANCELLED, COMPLETED, FAILED]
+          enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, RECOVERY_REQUIRED, CANCELLING, CANCELLED, COMPLETED, FAILED]
         assignedRobotId: { type: [string, "null"] }
         commandId: { type: [string, "null"] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         failureReason: { type: [string, "null"] }
+        recoveryPreviousState: { type: [string, "null"], enum: [ASSIGNED, DISPATCHED, EXECUTING, null] }
+        recoveryStartedAt: { type: [string, "null"], format: date-time }
     MissionEvent:
       type: object
       required: [eventId, missionId, type, state, robotId, commandId, message, data, occurredAt]
@@ -269,10 +286,10 @@ components:
         missionId: { type: string }
         type:
           type: string
-          enum: [MISSION_QUEUED, ASSIGNMENT_NOT_FOUND, MISSION_ASSIGNED, ROUTE_RESERVED, ROUTE_DELAYED, ROUTE_RELEASED, COMMAND_DELIVERY_FAILED, COMMAND_DISPATCHED, COMMAND_REJECTED, MISSION_EXECUTING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED]
+          enum: [MISSION_QUEUED, ASSIGNMENT_NOT_FOUND, MISSION_ASSIGNED, ROUTE_RESERVED, ROUTE_DELAYED, ROUTE_RELEASED, ROBOT_CONNECTION_DEGRADED, ROBOT_OFFLINE, MISSION_RECOVERY_REQUIRED, MISSION_RECOVERED, MISSION_RECOVERY_REQUEUED, TRAFFIC_SAFETY_HOLD, COMMAND_DELIVERY_FAILED, COMMAND_DISPATCHED, COMMAND_REJECTED, MISSION_EXECUTING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED]
         state:
           type: string
-          enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, CANCELLING, CANCELLED, COMPLETED, FAILED]
+          enum: [CREATED, QUEUED, ASSIGNED, DISPATCHED, EXECUTING, RECOVERY_REQUIRED, CANCELLING, CANCELLED, COMPLETED, FAILED]
         robotId: { type: [string, "null"] }
         commandId: { type: [string, "null"] }
         message: { type: string }
@@ -379,13 +396,13 @@ components:
     TrafficPlan:
       type: object
       additionalProperties: false
-      required: [routeId, missionId, robotId, mapId, status, originNodeId, pickupNodeId, dropoffNodeId, requestedStartAt, scheduledStartAt, expectedArrivalAt, totalDistanceMeters, totalWaitSeconds, segments, plannedAt, releasedAt]
+      required: [routeId, missionId, robotId, mapId, status, originNodeId, pickupNodeId, dropoffNodeId, requestedStartAt, scheduledStartAt, expectedArrivalAt, totalDistanceMeters, totalWaitSeconds, segments, plannedAt, lastRenewedAt, leaseExpiresAt, releasedAt]
       properties:
         routeId: { type: string }
         missionId: { type: string }
         robotId: { type: string }
         mapId: { type: string }
-        status: { type: string, enum: [ACTIVE, RELEASED] }
+        status: { type: string, enum: [ACTIVE, SAFETY_HOLD, RELEASED] }
         originNodeId: { type: string }
         pickupNodeId: { type: string }
         dropoffNodeId: { type: string }
@@ -398,6 +415,8 @@ components:
           type: array
           items: { $ref: "#/components/schemas/TrafficRouteSegment" }
         plannedAt: { type: string, format: date-time }
+        lastRenewedAt: { type: string, format: date-time }
+        leaseExpiresAt: { type: string, format: date-time }
         releasedAt: { type: [string, "null"], format: date-time }
     TrafficReservation:
       type: object
@@ -414,7 +433,7 @@ components:
         sequence: { type: integer, minimum: 0 }
         startsAt: { type: string, format: date-time }
         endsAt: { type: string, format: date-time }
-        state: { type: string, enum: [ACTIVE, RELEASED] }
+        state: { type: string, enum: [ACTIVE, SAFETY_HOLD, RELEASED] }
         releasedAt: { type: [string, "null"], format: date-time }
     TrafficSchedule:
       type: object
@@ -429,15 +448,28 @@ components:
         reservations:
           type: array
           items: { $ref: "#/components/schemas/TrafficReservation" }
+    FleetRecoveryStatus:
+      type: object
+      additionalProperties: false
+      required: [evaluatedAt, degradedRobots, offlineRobots, recoveryRequiredMissions, safetyHolds, nextLeaseExpiryAt]
+      properties:
+        evaluatedAt: { type: string, format: date-time }
+        degradedRobots: { type: integer, minimum: 0 }
+        offlineRobots: { type: integer, minimum: 0 }
+        recoveryRequiredMissions: { type: integer, minimum: 0 }
+        safetyHolds: { type: integer, minimum: 0 }
+        nextLeaseExpiryAt: { type: [string, "null"], format: date-time }
     RobotState:
       type: object
-      required: [schemaVersion, robotId, sequence, observedAt, connection, availability, batteryPercent, pose, activeMissionId]
+      required: [schemaVersion, robotId, sequence, observedAt, lastSeenAt, connectionChangedAt, connection, availability, batteryPercent, pose, activeMissionId]
       properties:
         schemaVersion: { const: "1.0" }
         robotId: { type: string }
         sequence: { type: integer, minimum: 0 }
         observedAt: { type: string, format: date-time }
-        connection: { type: string, enum: [ONLINE, OFFLINE] }
+        lastSeenAt: { type: string, format: date-time }
+        connectionChangedAt: { type: string, format: date-time }
+        connection: { type: string, enum: [ONLINE, DEGRADED, OFFLINE] }
         availability: { type: string, enum: [AVAILABLE, RESERVED, EXECUTING, CHARGING, ERROR, MANUAL] }
         batteryPercent: { type: number, minimum: 0, maximum: 100 }
         pose:

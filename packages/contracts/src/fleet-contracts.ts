@@ -1,6 +1,6 @@
 export const FLEET_SCHEMA_VERSION = "1.0" as const;
 
-export type RobotConnection = "ONLINE" | "OFFLINE";
+export type RobotConnection = "ONLINE" | "DEGRADED" | "OFFLINE";
 export type RobotAvailability =
   | "AVAILABLE"
   | "RESERVED"
@@ -35,6 +35,8 @@ export interface RobotStateSnapshot {
   robotId: string;
   sequence: number;
   observedAt: string;
+  lastSeenAt: string;
+  connectionChangedAt: string;
   connection: RobotConnection;
   availability: RobotAvailability;
   batteryPercent: number;
@@ -67,6 +69,7 @@ export type MissionState =
   | "ASSIGNED"
   | "DISPATCHED"
   | "EXECUTING"
+  | "RECOVERY_REQUIRED"
   | "CANCELLING"
   | "CANCELLED"
   | "COMPLETED"
@@ -87,6 +90,8 @@ export interface MissionView {
   createdAt: string;
   updatedAt: string;
   failureReason: string | null;
+  recoveryPreviousState: "ASSIGNED" | "DISPATCHED" | "EXECUTING" | null;
+  recoveryStartedAt: string | null;
 }
 
 export interface RobotView extends RobotDescriptor {
@@ -130,8 +135,8 @@ export interface MapTopologyView {
 }
 
 export type RoutePhase = "TO_PICKUP" | "TO_DROPOFF";
-export type TrafficPlanStatus = "ACTIVE" | "RELEASED";
-export type TrafficReservationState = "ACTIVE" | "RELEASED";
+export type TrafficPlanStatus = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
+export type TrafficReservationState = "ACTIVE" | "SAFETY_HOLD" | "RELEASED";
 export type TrafficResourceType = "EDGE" | "NODE";
 
 export interface TrafficRouteSegmentView {
@@ -176,6 +181,8 @@ export interface TrafficPlanView {
   totalWaitSeconds: number;
   segments: TrafficRouteSegmentView[];
   plannedAt: string;
+  lastRenewedAt: string;
+  leaseExpiresAt: string;
   releasedAt: string | null;
 }
 
@@ -184,6 +191,15 @@ export interface TrafficScheduleView {
   updatedAt: string;
   plans: TrafficPlanView[];
   reservations: TrafficReservationView[];
+}
+
+export interface FleetRecoveryStatusView {
+  evaluatedAt: string;
+  degradedRobots: number;
+  offlineRobots: number;
+  recoveryRequiredMissions: number;
+  safetyHolds: number;
+  nextLeaseExpiryAt: string | null;
 }
 
 export type MissionCommandStep =
@@ -270,6 +286,12 @@ export type MissionEventType =
   | "ROUTE_RESERVED"
   | "ROUTE_DELAYED"
   | "ROUTE_RELEASED"
+  | "ROBOT_CONNECTION_DEGRADED"
+  | "ROBOT_OFFLINE"
+  | "MISSION_RECOVERY_REQUIRED"
+  | "MISSION_RECOVERED"
+  | "MISSION_RECOVERY_REQUEUED"
+  | "TRAFFIC_SAFETY_HOLD"
   | "COMMAND_DELIVERY_FAILED"
   | "COMMAND_DISPATCHED"
   | "COMMAND_REJECTED"

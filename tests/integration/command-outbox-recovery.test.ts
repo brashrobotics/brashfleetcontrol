@@ -4,7 +4,7 @@ import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology } from "@
 import type { MissionCommand } from "@brash/contracts";
 import type { RobotAdapter } from "@brash/robot-adapter-sdk";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
-import { TrafficScheduler } from "@brash/domain";
+import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import {
   InMemoryAssignmentDecisionRepository,
   InMemoryCommandRepository,
@@ -64,6 +64,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "recovery-test",
   };
 
@@ -106,6 +107,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
     ], { now: () => clock.now() })),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "outbox-worker-test",
   };
   const core = new FleetCore(dependencies);
@@ -147,6 +149,7 @@ test("startup reconciliation does not overwrite a durable reservation with stale
     ids: new SequentialIdGenerator(),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "reconciliation-test",
   };
   const definition = robotFixture({ robotId: "BR-RECONCILE-01" });

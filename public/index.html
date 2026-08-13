@@ -41,7 +41,7 @@
           <article class="kpi-card"><span class="kpi-dot moving"></span><div><span class="kpi-label">IN MOTION</span><strong id="moving-count">3</strong><small>On mission</small></div><div class="sparkbars"><i></i><i></i><i></i><i></i><i></i></div></article>
           <article class="kpi-card"><span class="kpi-dot idle"></span><div><span class="kpi-label">IDLE / CHARGING</span><strong id="idle-count">2</strong><small>Ready</small></div><div class="mini-battery"><i></i></div></article>
           <article class="kpi-card warning-card"><span class="kpi-dot blocked"></span><div><span class="kpi-label">NEEDS ATTENTION</span><strong id="attention-count">1</strong><small id="attention-note">Corridor 3 obstruction</small></div><span class="trend">↗</span></article>
-          <article class="kpi-card"><div><span class="kpi-label">COMPLETED TODAY</span><strong>186</strong><small><em>+12%</em> vs. yesterday</small></div><div class="completion-glyph">✓</div></article>
+          <article class="kpi-card recovery-kpi"><div><span class="kpi-label">SAFETY HOLDS</span><strong id="safety-hold-count">0</strong><small id="recovery-note">No recovery required</small></div><div class="completion-glyph">⌁</div></article>
         </section>
 
         <section class="content-grid">
@@ -97,7 +97,7 @@
                 <label><input type="checkbox" data-layer="robots" checked /> Robot labels</label>
               </div>
             </div>
-            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend reserved"></i> Reserved lane</span><span><i class="legend delayed"></i> Scheduled wait</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
+            <footer class="map-footer"><span><i class="legend moving"></i> On mission</span><span><i class="legend idle"></i> Idle</span><span><i class="legend reserved"></i> Reserved lane</span><span><i class="legend delayed"></i> Scheduled wait</span><span><i class="legend safety-hold"></i> Safety hold</span><div class="map-update"><i></i> Last update: <b id="last-update">now</b></div></footer>
           </article>
 
           <aside class="detail-stack">
@@ -108,7 +108,7 @@
               <div class="telemetry-grid">
                 <div><span>BATTERY</span><strong id="detail-battery">82%</strong><div class="battery-line"><i id="battery-progress" style="width:82%"></i></div></div>
                 <div><span>SPEED</span><strong id="detail-speed">1.1 <small>m/s</small></strong><p>Limit 1.5 m/s</p></div>
-                <div><span>CONNECTION</span><strong class="good">−49 <small>dBm</small></strong><p>Wi-Fi 6 · Good</p></div>
+                <div><span>CONNECTION</span><strong class="good" id="detail-connection">ONLINE</strong><p id="detail-last-seen">Heartbeat now</p></div>
                 <div><span>LAST SERVICE</span><strong>18 <small>days</small></strong><p>312 hours remaining</p></div>
               </div>
               <div class="detail-actions"><button class="secondary-button" id="locate-button">◎ Locate on map</button><button class="danger-button" id="stop-button">■ Controlled stop</button></div>
@@ -121,7 +121,7 @@
 
             <article class="traffic-card panel">
               <div class="small-panel-title"><div><span class="section-index">04</span><h2>Traffic schedule</h2></div><span class="scheduler-state"><i></i> DEADLOCK SAFE</span></div>
-              <div class="traffic-metrics"><div><strong id="active-route-count">0</strong><span>ACTIVE ROUTES</span></div><div><strong id="reserved-resource-count">0</strong><span>RESOURCES</span></div><div><strong id="traffic-delay">0s</strong><span>MAX WAIT</span></div></div>
+              <div class="traffic-metrics"><div><strong id="active-route-count">0</strong><span>ACTIVE ROUTES</span></div><div><strong id="reserved-resource-count">0</strong><span>RESOURCES</span></div><div><strong id="traffic-hold-count">0</strong><span>SAFETY HOLDS</span></div></div>
               <div id="traffic-plan-list" class="traffic-plan-list"></div>
             </article>
           </aside>

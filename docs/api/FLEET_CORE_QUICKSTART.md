@@ -59,6 +59,7 @@ PostgreSQL persists:
 - Mission audit events for assignment, command delivery, and execution state.
 - Versioned factory map topologies.
 - Route plans and edge/node reservation time windows.
+- Robot heartbeat timestamps, recovery state, and renewable route leases.
 
 Robot and mission reservation is committed in one database transaction.
 Dispatch candidates are locked with `FOR UPDATE SKIP LOCKED`, so concurrent
@@ -73,6 +74,13 @@ transaction. If an edge or intersection is occupied, Fleet Core moves the
 complete route to the first conflict-free time slot and publishes
 `scheduledStartAt` to the adapter. PostgreSQL rejects overlapping active
 reservations even when multiple Fleet Core processes dispatch concurrently.
+
+Fleet Core evaluates server-received robot heartbeats continuously. A heartbeat
+first becomes `DEGRADED`, then `OFFLINE`. If an offline robot owns a mission,
+the mission becomes `RECOVERY_REQUIRED`, command retry is suspended, and its
+route resources become a visible `SAFETY_HOLD`. The hold is not released merely
+because a timer expired: the robot must reconnect and report whether the old
+command is still active. Only a confirmed clear state permits reassignment.
 
 ## Create and automatically dispatch a transport mission
 
@@ -123,10 +131,12 @@ Inspect the factory traffic graph and current reservation schedule:
 curl http://127.0.0.1:4273/api/v1/maps/plant-a%401/topology
 curl 'http://127.0.0.1:4273/api/v1/traffic/schedule?mapId=plant-a%401'
 curl http://127.0.0.1:4273/api/v1/missions/MISSION_ID/route
+curl http://127.0.0.1:4273/api/v1/recovery/status
 ```
 
 The operator dashboard renders the same topology and colors active/upcoming
 reserved lanes. Its traffic card shows route timing and wait duration.
+Safety holds are red; robot details show heartbeat age and connection state.
 
 Select any mission row in the dashboard to open its durable event timeline, or
 query it directly:

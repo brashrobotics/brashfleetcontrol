@@ -73,6 +73,7 @@ interface StoredCommand extends PendingCommand {
   nextAttemptAt: Date;
   leaseOwner: string | null;
   leaseExpiresAt: Date | null;
+  cancelled: boolean;
 }
 
 export class InMemoryCommandRepository implements CommandRepository {
@@ -90,14 +91,46 @@ export class InMemoryCommandRepository implements CommandRepository {
       nextAttemptAt: new Date(createdAt),
       leaseOwner: null,
       leaseExpiresAt: null,
+      cancelled: false,
     });
   }
 
   async updatePending(command: MissionCommand, updatedAt: Date): Promise<void> {
     const entry = this.require(command.commandId);
-    if (entry.receipt) return;
+    if (entry.receipt || entry.cancelled) return;
     entry.command = structuredClone(command);
     entry.nextAttemptAt = new Date(Math.min(entry.nextAttemptAt.getTime(), updatedAt.getTime()));
+  }
+
+  async deferPendingByMission(missionId: string, nextAttemptAt: Date, reason: string): Promise<void> {
+    for (const entry of this.commands.values()) {
+      if (entry.command.missionId !== missionId || entry.receipt || entry.cancelled) continue;
+      entry.nextAttemptAt = new Date(nextAttemptAt);
+      entry.lastError = reason;
+      entry.leaseOwner = null;
+      entry.leaseExpiresAt = null;
+    }
+  }
+
+  async resumePendingByMission(missionId: string, at: Date): Promise<void> {
+    for (const entry of this.commands.values()) {
+      if (entry.command.missionId !== missionId || entry.receipt || entry.cancelled) continue;
+      entry.nextAttemptAt = new Date(at);
+      entry.lastError = null;
+      entry.leaseOwner = null;
+      entry.leaseExpiresAt = null;
+    }
+  }
+
+  async cancelPendingByMission(missionId: string, at: Date, reason: string): Promise<void> {
+    for (const entry of this.commands.values()) {
+      if (entry.command.missionId !== missionId || entry.receipt || entry.cancelled) continue;
+      entry.cancelled = true;
+      entry.lastAttemptAt = new Date(at);
+      entry.lastError = reason;
+      entry.leaseOwner = null;
+      entry.leaseExpiresAt = null;
+    }
   }
 
   async claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null> {
@@ -154,6 +187,7 @@ export class InMemoryCommandRepository implements CommandRepository {
 
   private isClaimable(entry: StoredCommand, now: Date): boolean {
     return entry.receipt === null
+      && !entry.cancelled
       && entry.nextAttemptAt.getTime() <= now.getTime()
       && (!entry.leaseExpiresAt || entry.leaseExpiresAt.getTime() <= now.getTime());
   }
@@ -222,7 +256,7 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
     return [...this.plans.values()]
       .flatMap((plan) => plan.reservations)
       .filter((reservation) => reservation.mapId === mapId
-        && reservation.state === "ACTIVE"
+        && (reservation.state === "ACTIVE" || reservation.state === "SAFETY_HOLD")
         && reservation.endsAt.getTime() > after.getTime()
         && reservation.missionId !== excludeMissionId)
       .sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime() || left.reservationId.localeCompare(right.reservationId))
@@ -231,6 +265,50 @@ export class InMemoryTrafficPlanRepository implements TrafficPlanRepository {
 
   async save(plan: TrafficPlanSnapshot): Promise<void> {
     this.plans.set(plan.routeId, cloneTrafficPlan(plan));
+  }
+
+  async renewLeaseByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {
+    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    if (!entry) return null;
+    const [routeId, plan] = entry;
+    if (plan.status !== "ACTIVE") return cloneTrafficPlan(plan);
+    const renewed = { ...cloneTrafficPlan(plan), lastRenewedAt: new Date(renewedAt), leaseExpiresAt: new Date(expiresAt) };
+    this.plans.set(routeId, renewed);
+    return cloneTrafficPlan(renewed);
+  }
+
+  async placeSafetyHoldByMission(missionId: string, at: Date): Promise<TrafficPlanSnapshot | null> {
+    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    if (!entry) return null;
+    const [routeId, plan] = entry;
+    if (plan.status === "RELEASED") return cloneTrafficPlan(plan);
+    const held = {
+      ...cloneTrafficPlan(plan),
+      status: "SAFETY_HOLD" as const,
+      leaseExpiresAt: new Date(at),
+      reservations: plan.reservations.map((reservation) => ({
+        ...cloneTrafficReservation(reservation),
+        state: "SAFETY_HOLD" as const,
+        endsAt: new Date("9999-12-31T23:59:59.999Z"),
+      })),
+    };
+    this.plans.set(routeId, held);
+    return cloneTrafficPlan(held);
+  }
+
+  async acknowledgeSafetyHoldByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {
+    const entry = [...this.plans.entries()].find(([, plan]) => plan.missionId === missionId);
+    if (!entry) return null;
+    const [routeId, plan] = entry;
+    if (plan.status !== "SAFETY_HOLD") return cloneTrafficPlan(plan);
+    const resumed = {
+      ...cloneTrafficPlan(plan),
+      status: "SAFETY_HOLD" as const,
+      lastRenewedAt: new Date(renewedAt),
+      leaseExpiresAt: new Date(expiresAt),
+    };
+    this.plans.set(routeId, resumed);
+    return cloneTrafficPlan(resumed);
   }
 
   async releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null> {
@@ -315,6 +393,8 @@ function cloneTrafficPlan(plan: TrafficPlanSnapshot): TrafficPlanSnapshot {
     })),
     reservations: plan.reservations.map(cloneTrafficReservation),
     plannedAt: new Date(plan.plannedAt),
+    lastRenewedAt: new Date(plan.lastRenewedAt),
+    leaseExpiresAt: new Date(plan.leaseExpiresAt),
     releasedAt: plan.releasedAt ? new Date(plan.releasedAt) : null,
   };
 }

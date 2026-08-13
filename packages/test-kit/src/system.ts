@@ -1,5 +1,5 @@
 import { FleetCore, WeightedDispatchPolicy, createDefaultPlantTopology } from "@brash/application";
-import { TrafficScheduler } from "@brash/domain";
+import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import type { SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
@@ -66,6 +66,7 @@ export function createTestFleetSystem(options: {
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "test-fleet-core",
   });
 

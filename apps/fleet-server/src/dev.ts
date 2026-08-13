@@ -5,6 +5,7 @@ import { createDevelopmentSystem } from "./bootstrap/create-development-system.j
 import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
 import { serveFleetUi } from "./http/static-fleet-ui.js";
 import { OutboxRetryWorker } from "./workers/outbox-retry-worker.js";
+import { FleetRecoveryWorker } from "./workers/fleet-recovery-worker.js";
 
 const persistenceConfig = loadPersistenceConfig();
 const postgresSystem = persistenceConfig.mode === "postgres"
@@ -15,6 +16,8 @@ const { core, api } = system;
 await core.start();
 const outboxWorker = new OutboxRetryWorker(core);
 outboxWorker.start();
+const recoveryWorker = new FleetRecoveryWorker(core);
+recoveryWorker.start();
 
 const port = Number(process.env.FLEET_PORT ?? 4273);
 const server = createServer(async (incoming, outgoing) => {
@@ -42,6 +45,7 @@ const server = createServer(async (incoming, outgoing) => {
 
 async function shutdown(): Promise<void> {
   outboxWorker.stop();
+  recoveryWorker.stop();
   await core.stop();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());

@@ -6,9 +6,19 @@
 
 Manages the Fleet representation of registered robots independently of robot vendors.
 
-## Responsibilities
+## Current implementation
 
-Register and deactivate robots, normalize state, track connectivity, store capabilities and constraints, and verify active-mission consistency.
+Fleet Core records both robot-observed telemetry time and server-received
+`lastSeenAt`. `RobotLivenessPolicy` derives `DEGRADED` after 10 seconds without
+contact and `OFFLINE` after 30 seconds. Only `ONLINE` robots are dispatchable.
+
+An offline robot with an active mission triggers `RECOVERY_REQUIRED`; Fleet
+Core does not assume that a disconnected robot stopped moving. Reconnection can
+resume the existing mission or explicitly clear and fence the old robot before
+the mission is requeued.
+
+Future work includes configurable per-adapter thresholds, clock-skew metrics,
+manual recovery approval, and robot deactivation.
 
 ## Boundaries
 

@@ -6,9 +6,16 @@
 
 Defines the vendor-independent representation and rules for Fleet-managed robots.
 
-## Responsibilities
+## Current model
 
-Model Robot, RobotId, RobotState, RobotCapability, footprint, payload, energy, availability, and valid state transitions.
+`Robot` owns vendor-neutral registration, capabilities, payload, telemetry,
+availability, connection state, last server contact, and connection transition
+time. `RobotLivenessPolicy` deterministically maps heartbeat age to `ONLINE`,
+`DEGRADED`, or `OFFLINE`.
+
+Recovered robots may resume their known mission. A robot that reports no active
+command is quarantined in `ERROR` before the mission can move to another robot,
+preventing duplicate execution.
 
 ## Boundaries
 

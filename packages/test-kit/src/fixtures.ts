@@ -33,11 +33,14 @@ export function robotFixture(options: RobotFixtureOptions): SimulatorRobotDefini
       allowedZones: options.allowedZones ?? ["warehouse", "production"],
     },
   };
+  const observedAt = "2026-08-12T10:00:00.000Z";
   const state: RobotStateSnapshot = {
     schemaVersion: FLEET_SCHEMA_VERSION,
     robotId: options.robotId,
     sequence: 1,
-    observedAt: "2026-08-12T10:00:00.000Z",
+    observedAt,
+    lastSeenAt: observedAt,
+    connectionChangedAt: observedAt,
     connection: options.connection ?? "ONLINE",
     availability: options.availability ?? "AVAILABLE",
     batteryPercent: options.batteryPercent ?? 80,
@@ -79,4 +82,3 @@ export function transportMissionFixture(
     ...overrides,
   };
 }
-

@@ -59,3 +59,26 @@ test("a rejected assignment returns a mission to the queue", () => {
   assert.equal(mission.failureReason, "Robot rejected the job.");
 });
 
+test("mission can pause for recovery and resume its previous state", () => {
+  const mission = createMission();
+  mission.queue(new Date("2026-08-12T10:00:01.000Z"));
+  mission.assign("BR-01", new Date("2026-08-12T10:00:02.000Z"));
+  mission.markDispatched("COMMAND-0001", new Date("2026-08-12T10:00:03.000Z"));
+  mission.requireRecovery("Heartbeat expired.", new Date("2026-08-12T10:00:33.000Z"));
+  assert.equal(mission.state, "RECOVERY_REQUIRED");
+  assert.equal(mission.recoveryPreviousState, "DISPATCHED");
+  mission.resumeRecovery(new Date("2026-08-12T10:00:34.000Z"));
+  assert.equal(mission.state, "DISPATCHED");
+  assert.equal(mission.recoveryPreviousState, null);
+});
+
+test("a cleared recovered mission is fenced and requeued", () => {
+  const mission = createMission();
+  mission.queue(new Date("2026-08-12T10:00:01.000Z"));
+  mission.assign("BR-01", new Date("2026-08-12T10:00:02.000Z"));
+  mission.requireRecovery("Robot is offline.", new Date("2026-08-12T10:00:32.000Z"));
+  mission.requeueAfterRecovery("Robot confirmed the old command is inactive.", new Date("2026-08-12T10:00:40.000Z"));
+  assert.equal(mission.state, "QUEUED");
+  assert.equal(mission.assignedRobotId, null);
+  assert.equal(mission.commandId, null);
+});

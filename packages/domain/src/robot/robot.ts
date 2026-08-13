@@ -1,6 +1,6 @@
 import { DomainError } from "../shared/domain-error.js";
 
-export type RobotConnection = "ONLINE" | "OFFLINE";
+export type RobotConnection = "ONLINE" | "DEGRADED" | "OFFLINE";
 export type RobotAvailability =
   | "AVAILABLE"
   | "RESERVED"
@@ -37,7 +37,10 @@ export interface RobotTelemetry {
   activeMissionId: string | null;
 }
 
-export interface RobotSnapshot extends RobotRegistration, RobotTelemetry {}
+export interface RobotSnapshot extends RobotRegistration, RobotTelemetry {
+  lastSeenAt: Date;
+  connectionChangedAt: Date;
+}
 
 export class Robot {
   readonly robotId: string;
@@ -49,8 +52,15 @@ export class Robot {
   readonly allowedZones: readonly string[];
 
   private telemetry: RobotTelemetry;
+  private currentLastSeenAt: Date;
+  private currentConnectionChangedAt: Date;
 
-  private constructor(registration: RobotRegistration, telemetry: RobotTelemetry) {
+  private constructor(
+    registration: RobotRegistration,
+    telemetry: RobotTelemetry,
+    lastSeenAt = telemetry.observedAt,
+    connectionChangedAt = telemetry.observedAt,
+  ) {
     this.robotId = registration.robotId;
     this.displayName = registration.displayName;
     this.vendor = registration.vendor;
@@ -59,6 +69,8 @@ export class Robot {
     this.maxPayloadKg = registration.maxPayloadKg;
     this.allowedZones = Object.freeze([...new Set(registration.allowedZones)]);
     this.telemetry = { ...telemetry, pose: { ...telemetry.pose }, observedAt: new Date(telemetry.observedAt) };
+    this.currentLastSeenAt = new Date(lastSeenAt);
+    this.currentConnectionChangedAt = new Date(connectionChangedAt);
   }
 
   static register(registration: RobotRegistration, telemetry: RobotTelemetry): Robot {
@@ -74,7 +86,7 @@ export class Robot {
   }
 
   static restore(snapshot: RobotSnapshot): Robot {
-    return Robot.register({
+    const robot = Robot.register({
       robotId: snapshot.robotId,
       displayName: snapshot.displayName,
       vendor: snapshot.vendor,
@@ -92,6 +104,9 @@ export class Robot {
       pose: { ...snapshot.pose },
       activeMissionId: snapshot.activeMissionId,
     });
+    robot.currentLastSeenAt = new Date(snapshot.lastSeenAt);
+    robot.currentConnectionChangedAt = new Date(snapshot.connectionChangedAt);
+    return robot;
   }
 
   get connection(): RobotConnection {
@@ -114,12 +129,51 @@ export class Robot {
     return this.telemetry.activeMissionId;
   }
 
-  applyTelemetry(next: RobotTelemetry): boolean {
+  get lastSeenAt(): Date {
+    return new Date(this.currentLastSeenAt);
+  }
+
+  get connectionChangedAt(): Date {
+    return new Date(this.currentConnectionChangedAt);
+  }
+
+  applyTelemetry(next: RobotTelemetry, receivedAt = next.observedAt): boolean {
     if (next.robotId !== this.robotId) throw new DomainError("ROBOT_ID_MISMATCH", "Telemetry targets another robot.");
     Robot.assertBattery(next.batteryPercent);
     if (next.sequence <= this.telemetry.sequence) return false;
+    const connectionChanged = next.connection !== this.telemetry.connection;
     this.telemetry = { ...next, pose: { ...next.pose }, observedAt: new Date(next.observedAt) };
+    this.currentLastSeenAt = new Date(receivedAt);
+    if (connectionChanged) this.currentConnectionChangedAt = new Date(receivedAt);
     return true;
+  }
+
+  markConnection(connection: RobotConnection, at: Date): boolean {
+    if (connection === this.telemetry.connection) return false;
+    this.telemetry = { ...this.telemetry, connection };
+    this.currentConnectionChangedAt = new Date(at);
+    return true;
+  }
+
+  acknowledgeContact(at: Date): void {
+    this.currentLastSeenAt = new Date(at);
+    if (this.telemetry.connection !== "ONLINE") {
+      this.telemetry = { ...this.telemetry, connection: "ONLINE" };
+      this.currentConnectionChangedAt = new Date(at);
+    }
+  }
+
+  quarantine(missionId: string, at: Date): void {
+    if (this.activeMissionId !== missionId && this.activeMissionId !== null) {
+      throw new DomainError("ROBOT_MISSION_MISMATCH", `${this.robotId} is assigned to another mission.`);
+    }
+    this.telemetry = {
+      ...this.telemetry,
+      sequence: this.telemetry.sequence + 1,
+      observedAt: new Date(at),
+      availability: "ERROR",
+      activeMissionId: null,
+    };
   }
 
   reserve(missionId: string, at: Date): void {
@@ -180,6 +234,8 @@ export class Robot {
       batteryPercent: this.telemetry.batteryPercent,
       pose: { ...this.telemetry.pose },
       activeMissionId: this.telemetry.activeMissionId,
+      lastSeenAt: new Date(this.currentLastSeenAt),
+      connectionChangedAt: new Date(this.currentConnectionChangedAt),
     };
   }
 

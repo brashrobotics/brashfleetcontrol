@@ -38,6 +38,12 @@ Keep this README current as implementation is added, and define ownership, valid
 - Durable route plans and time-window reservations for shared edges and nodes.
 - A PostgreSQL exclusion constraint that rejects overlapping active reservations even under concurrent schedulers.
 
+`004_robot_liveness_and_recovery.sql` adds:
+
+- Server-received heartbeat and connection-transition timestamps.
+- `DEGRADED`, `OFFLINE`, and mission `RECOVERY_REQUIRED` lifecycle support.
+- Renewable route leases and a non-releasing `SAFETY_HOLD` traffic state.
+
 Migrations are ordered by numeric filename, checksummed, and recorded in
 `fleet_schema_migrations`. Never edit an applied migration; add the next
 numbered file.

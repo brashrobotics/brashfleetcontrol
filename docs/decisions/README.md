@@ -13,6 +13,7 @@ For each ADR, record context, decision, alternatives, consequences, status, date
 ## Current records
 
 - [ADR 0003: Full-route time-window reservations](./0003-full-route-time-window-reservations.md)
+- [ADR 0004: Offline robot safety holds](./0004-offline-robot-safety-holds.md)
 
 ## Boundaries
 

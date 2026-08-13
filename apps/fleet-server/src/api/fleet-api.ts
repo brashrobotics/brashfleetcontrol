@@ -50,6 +50,10 @@ export class FleetApi {
         return json({ schedule: await this.core.getTrafficSchedule(mapId) });
       }
 
+      if (request.method === "GET" && url.pathname === "/api/v1/recovery/status") {
+        return json({ recovery: await this.core.getRecoveryStatus() });
+      }
+
       if (request.method === "POST" && url.pathname === "/api/v1/missions") {
         const input = parseCreateMissionRequest(await request.json());
         const mission = await this.core.createMission(input);

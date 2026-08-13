@@ -6,6 +6,7 @@ export type MissionState =
   | "ASSIGNED"
   | "DISPATCHED"
   | "EXECUTING"
+  | "RECOVERY_REQUIRED"
   | "CANCELLING"
   | "CANCELLED"
   | "COMPLETED"
@@ -37,7 +38,11 @@ export interface MissionSnapshot extends Omit<CreateMissionProps, "createdAt"> {
   createdAt: Date;
   updatedAt: Date;
   failureReason: string | null;
+  recoveryPreviousState: RecoverableMissionState | null;
+  recoveryStartedAt: Date | null;
 }
+
+export type RecoverableMissionState = "ASSIGNED" | "DISPATCHED" | "EXECUTING";
 
 const TERMINAL_STATES = new Set<MissionState>(["CANCELLED", "COMPLETED", "FAILED"]);
 
@@ -57,6 +62,8 @@ export class Mission {
   private currentCommandId: string | null = null;
   private currentUpdatedAt: Date;
   private currentFailureReason: string | null = null;
+  private currentRecoveryPreviousState: RecoverableMissionState | null = null;
+  private currentRecoveryStartedAt: Date | null = null;
 
   private constructor(props: CreateMissionProps) {
     this.missionId = props.missionId;
@@ -101,6 +108,8 @@ export class Mission {
     mission.currentCommandId = snapshot.commandId;
     mission.currentUpdatedAt = new Date(snapshot.updatedAt);
     mission.currentFailureReason = snapshot.failureReason;
+    mission.currentRecoveryPreviousState = snapshot.recoveryPreviousState;
+    mission.currentRecoveryStartedAt = snapshot.recoveryStartedAt ? new Date(snapshot.recoveryStartedAt) : null;
     return mission;
   }
 
@@ -122,6 +131,14 @@ export class Mission {
 
   get failureReason(): string | null {
     return this.currentFailureReason;
+  }
+
+  get recoveryPreviousState(): RecoverableMissionState | null {
+    return this.currentRecoveryPreviousState;
+  }
+
+  get recoveryStartedAt(): Date | null {
+    return this.currentRecoveryStartedAt ? new Date(this.currentRecoveryStartedAt) : null;
   }
 
   queue(at: Date): void {
@@ -156,6 +173,38 @@ export class Mission {
     this.assertState("DISPATCHED", "start execution");
     this.assertCommand(commandId);
     this.transition("EXECUTING", at);
+  }
+
+  requireRecovery(reason: string, at: Date): void {
+    if (!new Set<MissionState>(["ASSIGNED", "DISPATCHED", "EXECUTING"]).has(this.currentState)) {
+      throw new DomainError("MISSION_TRANSITION_INVALID", `Cannot require recovery for a mission in ${this.currentState}.`);
+    }
+    this.currentRecoveryPreviousState = this.currentState as RecoverableMissionState;
+    this.currentRecoveryStartedAt = new Date(at);
+    this.currentFailureReason = reason || "Robot connectivity was lost.";
+    this.transition("RECOVERY_REQUIRED", at);
+  }
+
+  resumeRecovery(at: Date): void {
+    this.assertState("RECOVERY_REQUIRED", "resume recovery");
+    if (!this.currentRecoveryPreviousState) {
+      throw new DomainError("MISSION_RECOVERY_STATE_MISSING", "Mission has no state to resume after recovery.");
+    }
+    const previousState = this.currentRecoveryPreviousState;
+    this.currentRecoveryPreviousState = null;
+    this.currentRecoveryStartedAt = null;
+    this.currentFailureReason = null;
+    this.transition(previousState, at);
+  }
+
+  requeueAfterRecovery(reason: string, at: Date): void {
+    this.assertState("RECOVERY_REQUIRED", "requeue after recovery");
+    this.currentAssignedRobotId = null;
+    this.currentCommandId = null;
+    this.currentRecoveryPreviousState = null;
+    this.currentRecoveryStartedAt = null;
+    this.currentFailureReason = reason;
+    this.transition("QUEUED", at);
   }
 
   requestCancellation(at: Date): void {
@@ -201,6 +250,8 @@ export class Mission {
       createdAt: new Date(this.createdAt),
       updatedAt: new Date(this.currentUpdatedAt),
       failureReason: this.currentFailureReason,
+      recoveryPreviousState: this.currentRecoveryPreviousState,
+      recoveryStartedAt: this.currentRecoveryStartedAt ? new Date(this.currentRecoveryStartedAt) : null,
     };
   }
 

@@ -5,7 +5,7 @@ import {
   WeightedDispatchPolicy,
   createDefaultPlantTopology,
 } from "@brash/application";
-import { TrafficScheduler } from "@brash/domain";
+import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { randomUUID } from "node:crypto";
 import type { DatabaseConfig } from "@brash/config";
 import { PostgresPersistence } from "@brash/persistence";
@@ -32,6 +32,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
       adapter,
       dispatchPolicy: new WeightedDispatchPolicy(),
       trafficScheduler: new TrafficScheduler(),
+      livenessPolicy: new RobotLivenessPolicy(),
       instanceId: `fleet-server-${randomUUID()}`,
     });
 

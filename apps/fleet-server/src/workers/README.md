@@ -29,3 +29,8 @@ from one second up to one minute, preserving the original `commandId`.
 The worker is started after Fleet Core startup and stopped before adapter and
 database shutdown. Processing errors are reported without stopping later poll
 cycles.
+
+`FleetRecoveryWorker` runs every two seconds. It evaluates heartbeat age,
+persists connection transitions, renews traffic leases for healthy robots, and
+moves unreachable active missions into an idempotent safety hold. PostgreSQL
+row and map locks make the operation safe across multiple Fleet Core instances.

@@ -48,6 +48,9 @@ export interface CommandClaimOptions {
 export interface CommandRepository {
   enqueue(command: MissionCommand, createdAt: Date): Promise<void>;
   updatePending(command: MissionCommand, updatedAt: Date): Promise<void>;
+  deferPendingByMission(missionId: string, nextAttemptAt: Date, reason: string): Promise<void>;
+  resumePendingByMission(missionId: string, at: Date): Promise<void>;
+  cancelPendingByMission(missionId: string, at: Date, reason: string): Promise<void>;
   claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null>;
   claimPending(limit: number, options: CommandClaimOptions): Promise<PendingCommand[]>;
   recordAttempt(commandId: string, attemptedAt: Date): Promise<void>;
@@ -70,6 +73,9 @@ export interface TrafficPlanRepository {
     excludeMissionId?: string,
   ): Promise<TrafficReservationSnapshot[]>;
   save(plan: TrafficPlanSnapshot): Promise<void>;
+  renewLeaseByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null>;
+  placeSafetyHoldByMission(missionId: string, at: Date): Promise<TrafficPlanSnapshot | null>;
+  acknowledgeSafetyHoldByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null>;
   releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null>;
 }
 

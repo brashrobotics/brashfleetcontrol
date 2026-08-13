@@ -25,6 +25,7 @@ import {
   type MapTopologySnapshot,
   type MissionLocation,
   type MissionState,
+  type RecoverableMissionState,
   type RobotAvailability,
   type RobotConnection,
   type TrafficPlanSnapshot,
@@ -46,6 +47,8 @@ interface MissionRow {
   failure_reason: string | null;
   created_at: Date;
   updated_at: Date;
+  recovery_previous_state: RecoverableMissionState | null;
+  recovery_started_at: Date | null;
 }
 
 interface RobotRow {
@@ -66,6 +69,8 @@ interface RobotRow {
   pose_y: number;
   pose_yaw: number;
   active_mission_id: string | null;
+  last_seen_at: Date;
+  connection_changed_at: Date;
 }
 
 interface CommandRow {
@@ -110,6 +115,8 @@ interface TrafficPlanRow {
     exitAt: string;
   }>;
   planned_at: Date;
+  last_renewed_at: Date;
+  lease_expires_at: Date;
   released_at: Date | null;
 }
 
@@ -131,20 +138,22 @@ interface TrafficReservationRow {
 const MISSION_COLUMNS = `
   mission_id, external_reference, priority, required_capabilities, payload_kg,
   pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
-  created_at, updated_at
+  created_at, updated_at, recovery_previous_state, recovery_started_at
 `;
 
 const ROBOT_COLUMNS = `
   robot_id, display_name, vendor, model, capabilities, max_payload_kg,
   allowed_zones, sequence, observed_at, connection, availability,
-  battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id
+  battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id,
+  last_seen_at, connection_changed_at
 `;
 
 const TRAFFIC_PLAN_COLUMNS = `
   route_id, mission_id, robot_id, map_id, status,
   origin_node_id, pickup_node_id, dropoff_node_id,
   requested_start_at, scheduled_start_at, expected_arrival_at,
-  total_distance_meters, total_wait_seconds, segments, planned_at, released_at
+  total_distance_meters, total_wait_seconds, segments, planned_at,
+  last_renewed_at, lease_expires_at, released_at
 `;
 
 const TRAFFIC_RESERVATION_COLUMNS = `
@@ -184,9 +193,9 @@ export class PostgresMissionRepository implements MissionRepository {
       INSERT INTO missions (
         mission_id, external_reference, priority, required_capabilities, payload_kg,
         pickup, dropoff, state, assigned_robot_id, command_id, failure_reason,
-        created_at, updated_at
+        created_at, updated_at, recovery_previous_state, recovery_started_at
       ) VALUES (
-        $1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13
+        $1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15
       )
       ON CONFLICT (mission_id) DO UPDATE SET
         external_reference = EXCLUDED.external_reference,
@@ -199,6 +208,8 @@ export class PostgresMissionRepository implements MissionRepository {
         assigned_robot_id = EXCLUDED.assigned_robot_id,
         command_id = EXCLUDED.command_id,
         failure_reason = EXCLUDED.failure_reason,
+        recovery_previous_state = EXCLUDED.recovery_previous_state,
+        recovery_started_at = EXCLUDED.recovery_started_at,
         updated_at = EXCLUDED.updated_at,
         revision = missions.revision + 1
     `, [
@@ -215,6 +226,8 @@ export class PostgresMissionRepository implements MissionRepository {
       snapshot.failureReason,
       snapshot.createdAt,
       snapshot.updatedAt,
+      snapshot.recoveryPreviousState,
+      snapshot.recoveryStartedAt,
     ]);
   }
 }
@@ -243,10 +256,11 @@ export class PostgresRobotRepository implements RobotRepository {
       INSERT INTO robots (
         robot_id, display_name, vendor, model, capabilities, max_payload_kg,
         allowed_zones, sequence, observed_at, connection, availability,
-        battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id, updated_at
+        battery_percent, map_id, pose_x, pose_y, pose_yaw, active_mission_id,
+        updated_at, last_seen_at, connection_changed_at
       ) VALUES (
         $1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9, $10, $11,
-        $12, $13, $14, $15, $16, $17, $18
+        $12, $13, $14, $15, $16, $17, $18, $19, $20
       )
       ON CONFLICT (robot_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
@@ -265,6 +279,8 @@ export class PostgresRobotRepository implements RobotRepository {
         pose_y = EXCLUDED.pose_y,
         pose_yaw = EXCLUDED.pose_yaw,
         active_mission_id = EXCLUDED.active_mission_id,
+        last_seen_at = EXCLUDED.last_seen_at,
+        connection_changed_at = EXCLUDED.connection_changed_at,
         updated_at = EXCLUDED.updated_at
     `, [
       snapshot.robotId,
@@ -285,6 +301,8 @@ export class PostgresRobotRepository implements RobotRepository {
       snapshot.pose.yaw,
       snapshot.activeMissionId,
       snapshot.observedAt,
+      snapshot.lastSeenAt,
+      snapshot.connectionChangedAt,
     ]);
   }
 }
@@ -310,6 +328,33 @@ export class PostgresCommandRepository implements CommandRepository {
           updated_at = $3
       WHERE command_id = $1 AND status = 'PENDING'
     `, [command.commandId, JSON.stringify(command), updatedAt]);
+  }
+
+  async deferPendingByMission(missionId: string, nextAttemptAt: Date, reason: string): Promise<void> {
+    await this.database.query(`
+      UPDATE command_outbox
+      SET next_attempt_at = $2, last_error = $3,
+          lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+      WHERE mission_id = $1 AND status = 'PENDING'
+    `, [missionId, nextAttemptAt, reason]);
+  }
+
+  async resumePendingByMission(missionId: string, at: Date): Promise<void> {
+    await this.database.query(`
+      UPDATE command_outbox
+      SET next_attempt_at = $2, last_error = NULL,
+          lease_owner = NULL, lease_expires_at = NULL, updated_at = $2
+      WHERE mission_id = $1 AND status = 'PENDING'
+    `, [missionId, at]);
+  }
+
+  async cancelPendingByMission(missionId: string, at: Date, reason: string): Promise<void> {
+    await this.database.query(`
+      UPDATE command_outbox
+      SET status = 'CANCELLED', last_error = $3,
+          lease_owner = NULL, lease_expires_at = NULL, updated_at = $2
+      WHERE mission_id = $1 AND status = 'PENDING'
+    `, [missionId, at, reason]);
   }
 
   async claimById(commandId: string, options: CommandClaimOptions): Promise<PendingCommand | null> {
@@ -469,8 +514,8 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
       SELECT ${TRAFFIC_RESERVATION_COLUMNS}
       FROM traffic_reservations
       WHERE map_id = $1
-        AND state = 'ACTIVE'
-        AND ends_at > $2
+        AND state IN ('ACTIVE', 'SAFETY_HOLD')
+        AND (state = 'SAFETY_HOLD' OR ends_at > $2)
         AND ($3::text IS NULL OR mission_id <> $3)
       ORDER BY starts_at, reservation_id
     `, [mapId, after, excludeMissionId ?? null]);
@@ -485,10 +530,10 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
         origin_node_id, pickup_node_id, dropoff_node_id,
         requested_start_at, scheduled_start_at, expected_arrival_at,
         total_distance_meters, total_wait_seconds, segments,
-        planned_at, released_at, updated_at
+        planned_at, last_renewed_at, lease_expires_at, released_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        $12, $13, $14::jsonb, $15, $16, $15
+        $12, $13, $14::jsonb, $15, $16, $17, $18, $15
       )
       ON CONFLICT (route_id) DO UPDATE SET
         robot_id = EXCLUDED.robot_id,
@@ -504,6 +549,8 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
         total_wait_seconds = EXCLUDED.total_wait_seconds,
         segments = EXCLUDED.segments,
         planned_at = EXCLUDED.planned_at,
+        last_renewed_at = EXCLUDED.last_renewed_at,
+        lease_expires_at = EXCLUDED.lease_expires_at,
         released_at = EXCLUDED.released_at,
         updated_at = EXCLUDED.updated_at
     `, [
@@ -522,6 +569,8 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
       plan.totalWaitSeconds,
       JSON.stringify(plan.segments),
       plan.plannedAt,
+      plan.lastRenewedAt,
+      plan.leaseExpiresAt,
       plan.releasedAt,
     ]);
 
@@ -549,16 +598,48 @@ export class PostgresTrafficPlanRepository implements TrafficPlanRepository {
     }
   }
 
+  async renewLeaseByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {
+    await this.database.query(`
+      UPDATE traffic_route_plans
+      SET last_renewed_at = $2, lease_expires_at = $3, updated_at = $2
+      WHERE mission_id = $1 AND status = 'ACTIVE'
+    `, [missionId, renewedAt, expiresAt]);
+    return this.getByMission(missionId);
+  }
+
+  async placeSafetyHoldByMission(missionId: string, at: Date): Promise<TrafficPlanSnapshot | null> {
+    await this.database.query(`
+      UPDATE traffic_reservations
+      SET state = 'SAFETY_HOLD', ends_at = '9999-12-31 23:59:59.999+00'
+      WHERE mission_id = $1 AND state = 'ACTIVE'
+    `, [missionId]);
+    await this.database.query(`
+      UPDATE traffic_route_plans
+      SET status = 'SAFETY_HOLD', lease_expires_at = $2, updated_at = $2
+      WHERE mission_id = $1 AND status = 'ACTIVE'
+    `, [missionId, at]);
+    return this.getByMission(missionId);
+  }
+
+  async acknowledgeSafetyHoldByMission(missionId: string, renewedAt: Date, expiresAt: Date): Promise<TrafficPlanSnapshot | null> {
+    await this.database.query(`
+      UPDATE traffic_route_plans
+      SET last_renewed_at = $2, lease_expires_at = $3, updated_at = $2
+      WHERE mission_id = $1 AND status = 'SAFETY_HOLD'
+    `, [missionId, renewedAt, expiresAt]);
+    return this.getByMission(missionId);
+  }
+
   async releaseByMission(missionId: string, releasedAt: Date): Promise<TrafficPlanSnapshot | null> {
     await this.database.query(`
       UPDATE traffic_reservations
       SET state = 'RELEASED', released_at = $2
-      WHERE mission_id = $1 AND state = 'ACTIVE'
+      WHERE mission_id = $1 AND state IN ('ACTIVE', 'SAFETY_HOLD')
     `, [missionId, releasedAt]);
     await this.database.query(`
       UPDATE traffic_route_plans
       SET status = 'RELEASED', released_at = $2, updated_at = $2
-      WHERE mission_id = $1 AND status = 'ACTIVE'
+      WHERE mission_id = $1 AND status IN ('ACTIVE', 'SAFETY_HOLD')
     `, [missionId, releasedAt]);
     return this.getByMission(missionId);
   }
@@ -692,6 +773,8 @@ function trafficPlanFromRow(
     })),
     reservations,
     plannedAt: new Date(row.planned_at),
+    lastRenewedAt: new Date(row.last_renewed_at),
+    leaseExpiresAt: new Date(row.lease_expires_at),
     releasedAt: row.released_at ? new Date(row.released_at) : null,
   };
 }
@@ -709,6 +792,8 @@ function missionFromRow(row: MissionRow): Mission {
     assignedRobotId: row.assigned_robot_id,
     commandId: row.command_id,
     failureReason: row.failure_reason,
+    recoveryPreviousState: row.recovery_previous_state,
+    recoveryStartedAt: row.recovery_started_at ? new Date(row.recovery_started_at) : null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   });
@@ -735,5 +820,7 @@ function robotFromRow(row: RobotRow): Robot {
       yaw: row.pose_yaw,
     },
     activeMissionId: row.active_mission_id,
+    lastSeenAt: new Date(row.last_seen_at),
+    connectionChangedAt: new Date(row.connection_changed_at),
   });
 }

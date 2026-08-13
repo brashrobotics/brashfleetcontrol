@@ -22,6 +22,7 @@ export interface SimulatorAdapterOptions {
   autoAdvance?: boolean;
   startDelayMs?: number;
   completionDelayMs?: number;
+  heartbeatIntervalMs?: number;
 }
 
 interface ActiveCommand {
@@ -40,6 +41,8 @@ export class SimulatorAdapter implements RobotAdapter {
   private readonly autoAdvance: boolean;
   private readonly startDelayMs: number;
   private readonly completionDelayMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private connected = false;
 
   constructor(definitions: SimulatorRobotDefinition[], options: SimulatorAdapterOptions = {}) {
@@ -47,6 +50,7 @@ export class SimulatorAdapter implements RobotAdapter {
     this.autoAdvance = options.autoAdvance ?? false;
     this.startDelayMs = options.startDelayMs ?? 50;
     this.completionDelayMs = options.completionDelayMs ?? 1_000;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 0;
 
     for (const definition of definitions) {
       if (definition.descriptor.robotId !== definition.state.robotId) {
@@ -59,10 +63,16 @@ export class SimulatorAdapter implements RobotAdapter {
 
   async connect(): Promise<void> {
     this.connected = true;
+    if (this.heartbeatIntervalMs > 0 && !this.heartbeatTimer) {
+      this.heartbeatTimer = setInterval(() => void this.emitHeartbeats(), this.heartbeatIntervalMs);
+      this.heartbeatTimer.unref?.();
+    }
   }
 
   async disconnect(): Promise<void> {
     this.connected = false;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   async listRobots(): Promise<RobotDescriptor[]> {
@@ -99,10 +109,12 @@ export class SimulatorAdapter implements RobotAdapter {
     this.commands.set(command.commandId, { command: structuredClone(command), receipt });
 
     if (!rejection) {
+      const observedAt = this.now().toISOString();
       this.states.set(command.robotId, {
         ...state,
         sequence: state.sequence + 1,
-        observedAt: this.now().toISOString(),
+        observedAt,
+        lastSeenAt: observedAt,
         availability: "RESERVED",
         activeMissionId: command.missionId,
       });
@@ -152,6 +164,7 @@ export class SimulatorAdapter implements RobotAdapter {
       ...state,
       sequence: state.sequence + 1,
       observedAt,
+      lastSeenAt: observedAt,
       availability: "EXECUTING",
       activeMissionId: active.command.missionId,
     };
@@ -174,6 +187,27 @@ export class SimulatorAdapter implements RobotAdapter {
 
   async failMission(commandId: string, reason: string): Promise<void> {
     await this.finishCommand(commandId, "FAILED", reason);
+  }
+
+  async publishRobotState(
+    robotId: string,
+    patch: Partial<Pick<RobotStateSnapshot, "connection" | "availability" | "activeMissionId" | "batteryPercent" | "pose">>,
+  ): Promise<void> {
+    this.assertConnected();
+    const state = this.requireState(robotId);
+    const observedAt = this.now().toISOString();
+    const nextState: RobotStateSnapshot = {
+      ...state,
+      ...structuredClone(patch),
+      sequence: state.sequence + 1,
+      observedAt,
+      lastSeenAt: observedAt,
+      connectionChangedAt: patch.connection && patch.connection !== state.connection
+        ? observedAt
+        : state.connectionChangedAt,
+    };
+    this.states.set(robotId, nextState);
+    await this.emit({ type: "ROBOT_STATE", state: structuredClone(nextState) });
   }
 
   private rejectionReason(
@@ -206,6 +240,7 @@ export class SimulatorAdapter implements RobotAdapter {
       ...state,
       sequence: state.sequence + 1,
       observedAt,
+      lastSeenAt: observedAt,
       availability: "AVAILABLE",
       activeMissionId: null,
     };
@@ -235,6 +270,21 @@ export class SimulatorAdapter implements RobotAdapter {
     startTimer.unref?.();
   }
 
+  private async emitHeartbeats(): Promise<void> {
+    if (!this.connected) return;
+    for (const [robotId, state] of this.states) {
+      const observedAt = this.now().toISOString();
+      const nextState: RobotStateSnapshot = {
+        ...state,
+        sequence: state.sequence + 1,
+        observedAt,
+        lastSeenAt: observedAt,
+      };
+      this.states.set(robotId, nextState);
+      await this.emit({ type: "ROBOT_STATE", state: structuredClone(nextState) });
+    }
+  }
+
   private requireAcceptedCommand(commandId: string): ActiveCommand {
     const active = this.commands.get(commandId);
     if (!active || active.receipt.status !== "ACCEPTED") {
@@ -257,4 +307,3 @@ export class SimulatorAdapter implements RobotAdapter {
     if (!this.connected) throw new Error("Simulator adapter is not connected.");
   }
 }
-

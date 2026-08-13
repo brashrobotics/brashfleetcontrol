@@ -4,6 +4,7 @@ import {
   type CommandReceipt,
   type CreateMissionRequest,
   type DispatchResult,
+  type FleetRecoveryStatusView,
   type FleetSnapshot,
   type MapTopologyView,
   type MissionCommand,
@@ -18,6 +19,7 @@ import {
   DomainError,
   Mission,
   Robot,
+  RobotLivenessPolicy,
   TrafficScheduler,
   type RobotRegistration,
   type RobotTelemetry,
@@ -59,7 +61,13 @@ export interface FleetCoreDependencies {
   adapter: RobotAdapter;
   dispatchPolicy: WeightedDispatchPolicy;
   trafficScheduler: TrafficScheduler;
+  livenessPolicy: RobotLivenessPolicy;
   instanceId: string;
+}
+
+export interface FleetRecoveryOptions {
+  trafficLeaseMs?: number;
+  renewLeaseWithinMs?: number;
 }
 
 interface AssignmentPreparation {
@@ -76,11 +84,16 @@ interface CommandDeliveryResult {
 
 export class FleetCore {
   private readonly dependencies: FleetCoreDependencies;
+  private readonly trafficLeaseMs: number;
+  private readonly renewLeaseWithinMs: number;
+  private readonly managedRobotIds = new Set<string>();
   private unsubscribe: Unsubscribe | null = null;
   private started = false;
 
-  constructor(dependencies: FleetCoreDependencies) {
+  constructor(dependencies: FleetCoreDependencies, recoveryOptions: FleetRecoveryOptions = {}) {
     this.dependencies = dependencies;
+    this.trafficLeaseMs = recoveryOptions.trafficLeaseMs ?? 45_000;
+    this.renewLeaseWithinMs = recoveryOptions.renewLeaseWithinMs ?? 20_000;
   }
 
   async start(): Promise<void> {
@@ -94,6 +107,7 @@ export class FleetCore {
 
       const descriptors = await this.dependencies.adapter.listRobots();
       for (const descriptor of descriptors) {
+        this.managedRobotIds.add(descriptor.robotId);
         const state = await this.dependencies.adapter.getState(descriptor.robotId);
         const registration: RobotRegistration = {
           robotId: descriptor.robotId,
@@ -137,7 +151,9 @@ export class FleetCore {
                 pose: { ...state.pose },
                 activeMissionId: state.activeMissionId,
               };
-          await this.dependencies.robots.save(Robot.register(registration, telemetry));
+          const registered = Robot.register(registration, telemetry);
+          registered.acknowledgeContact(this.dependencies.clock.now());
+          await this.dependencies.robots.save(registered);
         });
       }
     } catch (error) {
@@ -153,6 +169,7 @@ export class FleetCore {
     this.unsubscribe?.();
     this.unsubscribe = null;
     await this.dependencies.adapter.disconnect();
+    this.managedRobotIds.clear();
     this.started = false;
   }
 
@@ -238,8 +255,9 @@ export class FleetCore {
         topology.mapId,
         now,
       );
+      const previousRoute = await this.dependencies.traffic.getByMission(mission.missionId);
       const route = this.dependencies.trafficScheduler.schedule({
-        routeId: this.dependencies.ids.next("route"),
+        routeId: previousRoute?.routeId ?? this.dependencies.ids.next("route"),
         missionId: mission.missionId,
         robotId: robot.robotId,
         topology,
@@ -333,6 +351,118 @@ export class FleetCore {
     };
   }
 
+  async getRecoveryStatus(): Promise<FleetRecoveryStatusView> {
+    const evaluatedAt = this.dependencies.clock.now();
+    const [robots, missions, maps] = await Promise.all([
+      this.dependencies.robots.list(),
+      this.dependencies.missions.list(),
+      this.dependencies.maps.list(),
+    ]);
+    const plans = (await Promise.all(maps.map((map) => this.dependencies.traffic.listByMap(map.mapId)))).flat();
+    const renewable = plans.filter((plan) => plan.status === "ACTIVE");
+    return {
+      evaluatedAt: evaluatedAt.toISOString(),
+      degradedRobots: robots.filter((robot) => robot.connection === "DEGRADED").length,
+      offlineRobots: robots.filter((robot) => robot.connection === "OFFLINE").length,
+      recoveryRequiredMissions: missions.filter((mission) => mission.state === "RECOVERY_REQUIRED").length,
+      safetyHolds: plans.filter((plan) => plan.status === "SAFETY_HOLD").length,
+      nextLeaseExpiryAt: renewable.length > 0
+        ? new Date(Math.min(...renewable.map((plan) => plan.leaseExpiresAt.getTime()))).toISOString()
+        : null,
+    };
+  }
+
+  async processFleetRecovery(limit = 100): Promise<number> {
+    this.assertStarted();
+    const candidates = (await this.dependencies.robots.list())
+      .filter((robot) => this.managedRobotIds.has(robot.robotId))
+      .slice(0, limit);
+    let changes = 0;
+
+    for (const candidate of candidates) {
+      const changed = await this.dependencies.transactions.runExclusive(async () => {
+        const robot = await this.dependencies.robots.getById(candidate.robotId, {
+          forUpdate: true,
+          skipLocked: true,
+        });
+        if (!robot) return false;
+        const now = this.dependencies.clock.now();
+        const liveness = this.dependencies.livenessPolicy.evaluate(robot, now);
+        const connectionChanged = robot.markConnection(liveness.connection, now);
+        const mission = robot.activeMissionId
+          ? await this.dependencies.missions.getById(robot.activeMissionId, { forUpdate: true })
+          : null;
+
+        if (connectionChanged && mission && liveness.connection === "DEGRADED") {
+          await this.appendMissionEvent(
+            mission,
+            "ROBOT_CONNECTION_DEGRADED",
+            `Robot ${robot.robotId} heartbeat is delayed.`,
+            now,
+            { heartbeatAgeMs: liveness.ageMs, lastSeenAt: robot.lastSeenAt.toISOString() },
+          );
+        }
+
+        if (liveness.connection === "OFFLINE" && mission) {
+          if (connectionChanged) {
+            await this.appendMissionEvent(
+              mission,
+              "ROBOT_OFFLINE",
+              `Robot ${robot.robotId} heartbeat expired.`,
+              now,
+              { heartbeatAgeMs: liveness.ageMs, lastSeenAt: robot.lastSeenAt.toISOString() },
+            );
+          }
+          if (["ASSIGNED", "DISPATCHED", "EXECUTING"].includes(mission.state)) {
+            mission.requireRecovery(`Robot ${robot.robotId} is offline; operator safety recovery is required.`, now);
+            await this.dependencies.commands.deferPendingByMission(
+              mission.missionId,
+              new Date(now.getTime() + 24 * 60 * 60_000),
+              "Command delivery suspended while robot recovery is required.",
+            );
+            await this.dependencies.missions.save(mission);
+            await this.appendMissionEvent(
+              mission,
+              "MISSION_RECOVERY_REQUIRED",
+              "Mission paused because the assigned robot is unreachable.",
+              now,
+              { previousState: mission.recoveryPreviousState },
+            );
+            const currentRoute = await this.dependencies.traffic.getByMission(mission.missionId);
+            if (currentRoute) await this.requireMapTopology(currentRoute.mapId, true);
+            const held = await this.dependencies.traffic.placeSafetyHoldByMission(mission.missionId, now);
+            if (held) {
+              await this.appendMissionEvent(
+                mission,
+                "TRAFFIC_SAFETY_HOLD",
+                "Traffic resources remain blocked until the robot reports a safe state.",
+                now,
+                { routeId: held.routeId },
+              );
+            }
+          }
+        } else if (liveness.connection === "ONLINE" && mission && mission.state !== "RECOVERY_REQUIRED") {
+          const route = await this.dependencies.traffic.getByMission(mission.missionId);
+          if (
+            route?.status === "ACTIVE"
+            && route.leaseExpiresAt.getTime() <= now.getTime() + this.renewLeaseWithinMs
+          ) {
+            await this.dependencies.traffic.renewLeaseByMission(
+              mission.missionId,
+              now,
+              new Date(now.getTime() + this.trafficLeaseMs),
+            );
+          }
+        }
+
+        if (connectionChanged) await this.dependencies.robots.save(robot);
+        return connectionChanged || mission?.state === "RECOVERY_REQUIRED";
+      });
+      if (changed) changes += 1;
+    }
+    return changes;
+  }
+
   async processPendingCommands(limit = 25): Promise<number> {
     this.assertStarted();
     const pending = await this.dependencies.commands.claimPending(
@@ -357,10 +487,13 @@ export class FleetCore {
   }
 
   async handleAdapterEvent(event: RobotAdapterEvent): Promise<void> {
+    let redispatchMissionId: string | null = null;
     await this.dependencies.transactions.runExclusive(async () => {
       if (event.type === "ROBOT_STATE") {
         const robot = await this.requireRobot(event.state.robotId, true);
-        robot.applyTelemetry({
+        const previousMissionId = robot.activeMissionId;
+        const receivedAt = this.dependencies.clock.now();
+        const applied = robot.applyTelemetry({
           robotId: event.state.robotId,
           sequence: event.state.sequence,
           observedAt: new Date(event.state.observedAt),
@@ -369,7 +502,55 @@ export class FleetCore {
           batteryPercent: event.state.batteryPercent,
           pose: { ...event.state.pose },
           activeMissionId: event.state.activeMissionId,
-        });
+        }, receivedAt);
+        if (!applied) return;
+
+        if (previousMissionId && event.state.connection === "ONLINE") {
+          const mission = await this.dependencies.missions.getById(previousMissionId, { forUpdate: true });
+          if (mission?.state === "RECOVERY_REQUIRED") {
+            if (event.state.activeMissionId === previousMissionId) {
+              mission.resumeRecovery(receivedAt);
+              await this.dependencies.commands.resumePendingByMission(mission.missionId, receivedAt);
+              await this.dependencies.traffic.acknowledgeSafetyHoldByMission(
+                mission.missionId,
+                receivedAt,
+                new Date(receivedAt.getTime() + this.trafficLeaseMs),
+              );
+              await this.dependencies.missions.save(mission);
+              await this.appendMissionEvent(
+                mission,
+                "MISSION_RECOVERED",
+                "Robot reconnected and confirmed the mission is still active.",
+                receivedAt,
+              );
+            } else if (event.state.activeMissionId === null && event.state.availability === "AVAILABLE") {
+              const previousRobotId = mission.assignedRobotId;
+              const previousCommandId = mission.commandId;
+              mission.requeueAfterRecovery("Robot confirmed that the previous command is no longer active.", receivedAt);
+              await this.dependencies.commands.cancelPendingByMission(
+                mission.missionId,
+                receivedAt,
+                "Superseded after connectivity recovery and mission reassignment.",
+              );
+              robot.quarantine(previousMissionId, receivedAt);
+              await this.releaseTrafficPlan(
+                mission,
+                receivedAt,
+                "Robot reported a clear state; safety hold released before reassignment.",
+              );
+              await this.dependencies.missions.save(mission);
+              await this.appendMissionEvent(
+                mission,
+                "MISSION_RECOVERY_REQUEUED",
+                "Recovered mission was automatically returned to the dispatch queue.",
+                receivedAt,
+                {},
+                { robotId: previousRobotId ?? undefined, commandId: previousCommandId ?? undefined },
+              );
+              redispatchMissionId = mission.missionId;
+            }
+          }
+        }
         await this.dependencies.robots.save(robot);
         return;
       }
@@ -377,12 +558,30 @@ export class FleetCore {
       const mission = await this.requireMission(event.missionId, true);
       const robot = await this.requireRobot(event.robotId, true);
       const observedAt = new Date(event.observedAt);
+      robot.acknowledgeContact(this.dependencies.clock.now());
+
+      if (mission.state === "RECOVERY_REQUIRED") {
+        mission.resumeRecovery(observedAt);
+        await this.dependencies.commands.resumePendingByMission(mission.missionId, observedAt);
+        await this.dependencies.traffic.acknowledgeSafetyHoldByMission(
+          mission.missionId,
+          observedAt,
+          new Date(observedAt.getTime() + this.trafficLeaseMs),
+        );
+        await this.appendMissionEvent(
+          mission,
+          "MISSION_RECOVERED",
+          "Robot status resumed the mission after a connectivity interruption.",
+          observedAt,
+        );
+      }
 
       if (event.status === "EXECUTING") {
-        if (mission.state === "EXECUTING") return;
-        mission.markExecuting(event.commandId, observedAt);
-        robot.markExecuting(event.missionId, observedAt);
-        await this.appendMissionEvent(mission, "MISSION_EXECUTING", "Robot started mission execution.", observedAt);
+        if (mission.state !== "EXECUTING") {
+          mission.markExecuting(event.commandId, observedAt);
+          robot.markExecuting(event.missionId, observedAt);
+          await this.appendMissionEvent(mission, "MISSION_EXECUTING", "Robot started mission execution.", observedAt);
+        }
       } else if (event.status === "COMPLETED") {
         if (mission.state === "COMPLETED") return;
         mission.complete(event.commandId, observedAt);
@@ -412,6 +611,14 @@ export class FleetCore {
       await this.dependencies.missions.save(mission);
       await this.dependencies.robots.save(robot);
     });
+
+    if (redispatchMissionId) {
+      try {
+        await this.dispatchMission(redispatchMissionId);
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+      }
+    }
   }
 
   private buildCommand(
@@ -450,6 +657,16 @@ export class FleetCore {
 
   private async deliverCommand(pending: PendingCommand): Promise<CommandDeliveryResult> {
     const command = await this.refreshStaleRoute(pending.command);
+    const current = await this.requireMission(command.missionId);
+    if (current.state === "RECOVERY_REQUIRED") {
+      const now = this.dependencies.clock.now();
+      await this.dependencies.commands.deferPendingByMission(
+        current.missionId,
+        new Date(now.getTime() + 24 * 60 * 60_000),
+        "Command delivery suspended while robot recovery is required.",
+      );
+      return { mission: current, receipt: null };
+    }
     const attemptedAt = this.dependencies.clock.now();
     await this.dependencies.commands.recordAttempt(command.commandId, attemptedAt);
 
@@ -584,7 +801,7 @@ export class FleetCore {
 
   private async releaseTrafficPlan(mission: Mission, releasedAt: Date, message: string): Promise<void> {
     const current = await this.dependencies.traffic.getByMission(mission.missionId);
-    if (!current || current.status !== "ACTIVE") return;
+    if (!current || (current.status !== "ACTIVE" && current.status !== "SAFETY_HOLD")) return;
     const released = await this.dependencies.traffic.releaseByMission(mission.missionId, releasedAt);
     await this.appendMissionEvent(
       mission,

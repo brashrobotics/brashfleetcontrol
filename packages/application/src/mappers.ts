@@ -31,6 +31,8 @@ export function missionToView(mission: Mission): MissionView {
     createdAt: snapshot.createdAt.toISOString(),
     updatedAt: snapshot.updatedAt.toISOString(),
     failureReason: snapshot.failureReason,
+    recoveryPreviousState: snapshot.recoveryPreviousState,
+    recoveryStartedAt: snapshot.recoveryStartedAt?.toISOString() ?? null,
   };
 }
 
@@ -51,6 +53,8 @@ export function robotToView(robot: Robot): RobotView {
       robotId: snapshot.robotId,
       sequence: snapshot.sequence,
       observedAt: snapshot.observedAt.toISOString(),
+      lastSeenAt: snapshot.lastSeenAt.toISOString(),
+      connectionChangedAt: snapshot.connectionChangedAt.toISOString(),
       connection: snapshot.connection,
       availability: snapshot.availability,
       batteryPercent: snapshot.batteryPercent,
@@ -92,6 +96,8 @@ export function trafficPlanToView(plan: TrafficPlanSnapshot): TrafficPlanView {
       exitAt: segment.exitAt.toISOString(),
     })),
     plannedAt: plan.plannedAt.toISOString(),
+    lastRenewedAt: plan.lastRenewedAt.toISOString(),
+    leaseExpiresAt: plan.leaseExpiresAt.toISOString(),
     releasedAt: plan.releasedAt?.toISOString() ?? null,
   };
 }

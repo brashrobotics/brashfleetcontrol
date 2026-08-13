@@ -5,7 +5,7 @@ import {
   createDefaultPlantTopology,
   WeightedDispatchPolicy,
 } from "@brash/application";
-import { TrafficScheduler } from "@brash/domain";
+import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { FLEET_SCHEMA_VERSION, type RobotDescriptor, type RobotStateSnapshot } from "@brash/contracts";
 import { SimulatorAdapter, type SimulatorRobotDefinition } from "@brash/simulator-adapter";
 import {
@@ -40,11 +40,14 @@ function simulatorRobot(input: {
       allowedZones: ["warehouse", "production", "quality"],
     },
   };
+  const observedAt = new Date().toISOString();
   const state: RobotStateSnapshot = {
     schemaVersion: FLEET_SCHEMA_VERSION,
     robotId: input.robotId,
     sequence: 1,
-    observedAt: new Date().toISOString(),
+    observedAt,
+    lastSeenAt: observedAt,
+    connectionChangedAt: observedAt,
     connection: "ONLINE",
     availability: "AVAILABLE",
     batteryPercent: input.batteryPercent,
@@ -59,7 +62,7 @@ export function createDevelopmentAdapter(): SimulatorAdapter {
     simulatorRobot({ robotId: "BR-01", displayName: "Atlas", capabilities: ["pallet_transport"], maxPayloadKg: 500, batteryPercent: 70, x: 40, y: 5 }),
     simulatorRobot({ robotId: "BR-02", displayName: "Nova", capabilities: ["box_transport"], maxPayloadKg: 100, batteryPercent: 90, x: 10, y: 5 }),
     simulatorRobot({ robotId: "BR-03", displayName: "Kite", capabilities: ["pallet_transport"], maxPayloadKg: 800, batteryPercent: 35, x: 70, y: 65 }),
-  ], { autoAdvance: true });
+  ], { autoAdvance: true, heartbeatIntervalMs: 1_000 });
 }
 
 export function createDevelopmentSystem() {
@@ -80,6 +83,7 @@ export function createDevelopmentSystem() {
     adapter,
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: "fleet-server-memory",
   });
 

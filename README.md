@@ -24,6 +24,9 @@ What works today:
 - PostgreSQL-backed edge/node time-window reservations
 - Conservative full-route scheduling that prevents reservation deadlocks
 - Live topology, route, delay, and reservation visibility in the operator console
+- Heartbeat-based `ONLINE`, `DEGRADED`, and `OFFLINE` robot liveness
+- Renewable route leases and conservative traffic safety holds
+- Safe mission recovery or reassignment after explicit robot-state confirmation
 
 What is not production-ready yet:
 
@@ -58,6 +61,7 @@ The repository now also contains the first vendor-independent Fleet Core impleme
 - Map-aware routing and conflict-free traffic time slots
 - Idempotent command handling
 - Mission execution state reconciliation
+- Offline-robot recovery without duplicate physical mission execution
 - Versioned `/api/v1` HTTP endpoints
 
 Start it separately from the existing operator demo:

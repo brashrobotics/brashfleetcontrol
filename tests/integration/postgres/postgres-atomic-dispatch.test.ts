@@ -7,7 +7,7 @@ import {
   createDefaultPlantTopology,
   type IdGenerator,
 } from "@brash/application";
-import { TrafficScheduler } from "@brash/domain";
+import { RobotLivenessPolicy, TrafficScheduler } from "@brash/domain";
 import { loadPersistenceConfig } from "@brash/config";
 import { SimulatorAdapter } from "@brash/simulator-adapter";
 import { PostgresPersistence } from "@brash/persistence";
@@ -26,6 +26,7 @@ test("concurrent dispatchers cannot reserve the same PostgreSQL robot", {
   const secondPersistence = createPersistence(databaseUrl!);
 
   await firstPersistence.migrate();
+  await releaseStalePostgresTestHolds(firstPersistence);
   await firstPersistence.maps.save(createDefaultPlantTopology());
   const first = createCore(firstPersistence, `A-${suffix}`, robotId, capability, clock);
   const second = createCore(secondPersistence, `B-${suffix}`, robotId, capability, clock);
@@ -82,6 +83,7 @@ test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap
   const firstPersistence = createPersistence(databaseUrl!);
   const secondPersistence = createPersistence(databaseUrl!);
   await firstPersistence.migrate();
+  await releaseStalePostgresTestHolds(firstPersistence);
   await firstPersistence.maps.save(createDefaultPlantTopology());
   const first = createMultiRobotCore(firstPersistence, `TA-${suffix}`, robotIds, capability, clock);
   const second = createMultiRobotCore(secondPersistence, `TB-${suffix}`, robotIds, capability, clock);
@@ -127,6 +129,75 @@ test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap
   }
 });
 
+test("concurrent recovery workers create one durable safety hold", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const suffix = randomUUID();
+  const robotId = `PG-RECOVERY-${suffix}`;
+  const capability = `recovery-${suffix}`;
+  const clock = new ManualClock(new Date().toISOString());
+  const firstPersistence = createPersistence(databaseUrl!);
+  const secondPersistence = createPersistence(databaseUrl!);
+  await firstPersistence.migrate();
+  await releaseStalePostgresTestHolds(firstPersistence);
+  await firstPersistence.maps.save(createDefaultPlantTopology());
+  const first = createCore(firstPersistence, `RA-${suffix}`, robotId, capability, clock);
+  const second = createCore(secondPersistence, `RB-${suffix}`, robotId, capability, clock);
+
+  try {
+    await first.start();
+    await second.start();
+    const mission = await first.createMission(transportMissionFixture({
+      externalReference: `PG-RECOVERY-${suffix}`,
+      requiredCapabilities: [capability],
+    }));
+    await first.dispatchMission(mission.missionId);
+    clock.advance(30_001);
+
+    await Promise.all([first.processFleetRecovery(), second.processFleetRecovery()]);
+
+    assert.equal((await first.getMission(mission.missionId)).state, "RECOVERY_REQUIRED");
+    assert.equal((await first.getMissionRoute(mission.missionId))?.status, "SAFETY_HOLD");
+    const heldReservations = await firstPersistence.database.query<{ state: string; held_until_year: number }>(`
+      SELECT state, min(extract(year FROM ends_at))::integer AS held_until_year
+      FROM traffic_reservations
+      WHERE mission_id = $1
+      GROUP BY state
+    `, [mission.missionId]);
+    assert.deepEqual(heldReservations.rows, [{ state: "SAFETY_HOLD", held_until_year: 9999 }]);
+    const eventCounts = await firstPersistence.database.query<{ event_type: string; count: string }>(`
+      SELECT event_type, count(*)::text AS count
+      FROM mission_events
+      WHERE mission_id = $1
+        AND event_type IN ('ROBOT_OFFLINE', 'MISSION_RECOVERY_REQUIRED', 'TRAFFIC_SAFETY_HOLD')
+      GROUP BY event_type
+      ORDER BY event_type
+    `, [mission.missionId]);
+    assert.deepEqual(eventCounts.rows, [
+      { event_type: "MISSION_RECOVERY_REQUIRED", count: "1" },
+      { event_type: "ROBOT_OFFLINE", count: "1" },
+      { event_type: "TRAFFIC_SAFETY_HOLD", count: "1" },
+    ]);
+  } finally {
+    await firstPersistence.traffic.releaseByMission(`RA-${suffix}-MISSION-1`, clock.now());
+    await first.stop();
+    await second.stop();
+    await firstPersistence.close();
+    await secondPersistence.close();
+  }
+});
+
+async function releaseStalePostgresTestHolds(persistence: PostgresPersistence): Promise<void> {
+  const stale = await persistence.database.query<{ mission_id: string }>(`
+    SELECT mission_id
+    FROM missions
+    WHERE external_reference LIKE 'PG-%'
+  `);
+  for (const row of stale.rows) {
+    await persistence.traffic.releaseByMission(row.mission_id, new Date());
+  }
+}
+
 function createPersistence(connectionString: string): PostgresPersistence {
   const config = loadPersistenceConfig({
     FLEET_PERSISTENCE: "postgres",
@@ -158,6 +229,7 @@ function createCore(
     ], { now: () => clock.now() }),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: `postgres-test-${idPrefix}`,
   });
 }
@@ -188,6 +260,7 @@ function createMultiRobotCore(
     })), { now: () => clock.now() }),
     dispatchPolicy: new WeightedDispatchPolicy(),
     trafficScheduler: new TrafficScheduler(),
+    livenessPolicy: new RobotLivenessPolicy(),
     instanceId: `postgres-traffic-test-${idPrefix}`,
   });
 }

@@ -46,6 +46,16 @@ test("API creates, assigns, dispatches, executes, and completes a transport miss
   assert.equal(schedule.schedule.plans.length, 1);
   assert.ok(schedule.schedule.reservations.length > 0);
 
+  const recoveryResponse = await api.fetch(new Request("http://fleet.test/api/v1/recovery/status"));
+  assert.equal(recoveryResponse.status, 200);
+  const recovery = await recoveryResponse.json() as {
+    recovery: { degradedRobots: number; offlineRobots: number; recoveryRequiredMissions: number; safetyHolds: number };
+  };
+  assert.equal(recovery.recovery.degradedRobots, 0);
+  assert.equal(recovery.recovery.offlineRobots, 0);
+  assert.equal(recovery.recovery.recoveryRequiredMissions, 0);
+  assert.equal(recovery.recovery.safetyHolds, 0);
+
   clock.advance(1_000);
   await adapter.startMission(created.mission.commandId);
   clock.advance(2_000);
