@@ -23,6 +23,9 @@ npm run dev:core
 
 The API starts at `http://127.0.0.1:4273`.
 
+Development defaults to `FLEET_SITE_ID=plant-a`. Authenticated API calls must
+send the same value in `X-Fleet-Site`.
+
 Open `http://127.0.0.1:4273` in a browser to view the Fleet Management screen.
 It reads Fleet Core data from the same server. The health endpoint remains at
 `/api/v1/health`.
@@ -62,6 +65,9 @@ Fleet Core also selects PostgreSQL automatically when `DATABASE_URL` is set.
 The migration runner is safe to run more than once and rejects changes to an
 already-applied migration. It retries transient startup connections for up to
 30 seconds, which also covers PostgreSQL's first-run initialization restart.
+`DATABASE_SCHEMA` selects the physical PostgreSQL namespace for the site. Use a
+different validated schema for every `FLEET_SITE_ID`; see
+[`SITE_ISOLATION.md`](../operations/SITE_ISOLATION.md).
 
 PostgreSQL persists:
 

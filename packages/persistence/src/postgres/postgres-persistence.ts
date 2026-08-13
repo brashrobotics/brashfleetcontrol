@@ -68,7 +68,19 @@ export class PostgresPersistence {
   }
 
   async migrate(): Promise<void> {
+    await this.database.ensureSchema();
     await runPostgresMigrations(this.database, { timeoutMs: this.startupTimeoutMs });
+  }
+
+  async bindSite(siteId: string): Promise<void> {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(siteId)) throw new Error("Invalid Fleet site binding identifier.");
+    await this.database.transaction(async () => {
+      await this.database.query("INSERT INTO fleet_site_binding (singleton, site_id) VALUES (true, $1) ON CONFLICT (singleton) DO NOTHING", [siteId]);
+      const result = await this.database.query<{ site_id: string }>("SELECT site_id FROM fleet_site_binding WHERE singleton=true");
+      if (result.rows[0]?.site_id !== siteId) {
+        throw new Error(`Database schema ${this.database.schema} is bound to site ${result.rows[0]?.site_id ?? "unknown"}, not ${siteId}.`);
+      }
+    });
   }
 
   async close(): Promise<void> {

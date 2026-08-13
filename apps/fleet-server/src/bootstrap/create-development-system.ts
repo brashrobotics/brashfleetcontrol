@@ -80,13 +80,14 @@ export function createDevelopmentAdapter(): SimulatorAdapter {
   ], { autoAdvance: true, heartbeatIntervalMs: 1_000 });
 }
 
-export function createDevelopmentSystem() {
+export function createDevelopmentSystem(siteId = "plant-a") {
   const adapter = createDevelopmentAdapter();
   const topology = createDefaultPlantTopology();
   const infrastructureResources = new InMemoryInfrastructureResourceRepository(defaultInfrastructureResources());
 
   const integrationEvents = new InMemoryIntegrationEventRepository();
   const core = new FleetCore({
+    siteId,
     alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
@@ -118,6 +119,7 @@ export function createDevelopmentSystem() {
   const metrics = new MetricsRegistry();
   const logger = new StructuredLogger("brash-fleet-core");
   const api = new SecuredFleetApi(new FleetApi(core), {
+    siteId,
     identities: createDevelopmentIdentityProvider(),
     audit,
     observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },

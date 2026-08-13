@@ -39,6 +39,7 @@ export class FleetApi {
         return json({
           ok: true,
           service: "brash-fleet-core",
+          siteId: this.core.siteId,
           robots: snapshot.robots.length,
           missions: snapshot.missions.length,
         });

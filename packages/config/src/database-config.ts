@@ -5,6 +5,7 @@ export interface DatabaseConfig {
   statementTimeoutMs: number;
   startupTimeoutMs: number;
   ssl: boolean;
+  schema: string;
 }
 
 export type PersistenceMode = "memory" | "postgres";
@@ -39,8 +40,15 @@ export function loadPersistenceConfig(
       statementTimeoutMs: positiveInteger(environment.DATABASE_STATEMENT_TIMEOUT_MS, 15_000, "DATABASE_STATEMENT_TIMEOUT_MS"),
       startupTimeoutMs: positiveInteger(environment.DATABASE_STARTUP_TIMEOUT_MS, 30_000, "DATABASE_STARTUP_TIMEOUT_MS"),
       ssl: environment.DATABASE_SSL === "true",
+      schema: databaseSchema(environment.DATABASE_SCHEMA),
     },
   };
+}
+
+function databaseSchema(value: string | undefined): string {
+  const schema = value?.trim() || "public";
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(schema)) throw new Error("DATABASE_SCHEMA must be a lowercase PostgreSQL identifier.");
+  return schema;
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {

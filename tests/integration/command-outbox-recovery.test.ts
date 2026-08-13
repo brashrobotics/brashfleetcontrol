@@ -67,6 +67,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
     robotFixture({ robotId: "BR-RECOVERY-01" }),
   ], { now: () => clock.now() }));
   const dependencies = {
+    siteId: "plant-a",
     alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
@@ -118,6 +119,7 @@ test("a pending command survives a Fleet Core restart and is delivered with the 
 test("the outbox worker retries a due command without restarting Fleet Core", async () => {
   const clock = new ManualClock();
   const dependencies = {
+    siteId: "plant-a",
     alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),
@@ -173,6 +175,7 @@ test("the outbox worker retries a due command without restarting Fleet Core", as
 test("startup reconciliation does not overwrite a durable reservation with stale available telemetry", async () => {
   const clock = new ManualClock();
   const shared = {
+    siteId: "plant-a",
     alarms: new InMemoryAlarmRepository(),
     missions: new InMemoryMissionRepository(),
     missionQueue: new InMemoryMissionQueueRepository(),

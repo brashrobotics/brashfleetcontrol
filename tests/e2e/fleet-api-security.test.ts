@@ -18,6 +18,7 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
   const logs: string[] = [];
   let auditId = 0;
   const api = new SecuredFleetApi(new FleetApi(core), {
+    siteId: "plant-a",
     identities: new StaticTokenIdentityProvider([
       { token: VIEWER_TOKEN, subjectId: "viewer-1", displayName: "Viewer", subjectType: "USER", role: "VIEWER", siteIds: ["plant-a"] },
       { token: OPERATOR_TOKEN, subjectId: "operator-1", displayName: "Operator", subjectType: "USER", role: "OPERATOR", siteIds: ["plant-a"] },
@@ -38,6 +39,21 @@ test("secured API enforces authentication, RBAC, actor binding, and immutable au
     const unauthenticated = await api.fetch(new Request("http://fleet.test/api/v1/fleet/snapshot"));
     assert.equal(unauthenticated.status, 401);
     assert.match(unauthenticated.headers.get("www-authenticate") ?? "", /Bearer/);
+
+    const missingSite = await api.fetch(new Request("http://fleet.test/api/v1/fleet/snapshot", {
+      headers: { authorization: `Bearer ${VIEWER_TOKEN}` },
+    }));
+    assert.equal(missingSite.status, 400);
+    assert.equal((await missingSite.json() as { error: { code: string } }).error.code, "SITE_ID_REQUIRED");
+
+    const wrongSite = await api.fetch(new Request("http://fleet.test/api/v1/missions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${OPERATOR_TOKEN}`, "content-type": "application/json", "x-fleet-site": "plant-b", "x-correlation-id": "wrong-site-correlation" },
+      body: JSON.stringify(transportMissionFixture({ externalReference: "WRONG-SITE" })),
+    }));
+    assert.equal(wrongSite.status, 404);
+    assert.equal((await wrongSite.json() as { error: { code: string } }).error.code, "SITE_NOT_SERVED");
+    assert.equal((await core.getSnapshot()).missions.length, 0);
 
     const denied = await api.fetch(authenticatedRequest("http://fleet.test/api/v1/missions", VIEWER_TOKEN, {
       method: "POST",

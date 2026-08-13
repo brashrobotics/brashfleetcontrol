@@ -6,6 +6,12 @@
 
 Provides runbooks for installing, operating, recovering, and upgrading Fleet Control.
 
+Current runbooks:
+
+- [Observability and incident response](./OBSERVABILITY_RUNBOOK.md)
+- [Resilience testing](./RESILIENCE_TESTING.md)
+- [Site isolation and provisioning](./SITE_ISOLATION.md)
+
 ## Responsibilities
 
 Document startup/shutdown, upgrade/rollback, backup/restore, incident response, offline robots, stuck missions, and broker/database outages.

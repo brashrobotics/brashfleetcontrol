@@ -398,6 +398,7 @@ export interface RobotView extends RobotDescriptor {
 
 export interface FleetSnapshot {
   schemaVersion: typeof FLEET_SCHEMA_VERSION;
+  siteId: string;
   updatedAt: string;
   robots: RobotView[];
   missions: MissionView[];

@@ -64,12 +64,13 @@ let timelineMissionId = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const fleetApiToken = sessionStorage.getItem("brashFleetApiToken") || "brash-dev-operator";
+let fleetSiteId = sessionStorage.getItem("brashFleetSiteId") || "plant-a";
 const statusLabels = { moving: "ON MISSION", idle: "IDLE", charging: "CHARGING", blocked: "NEEDS ATTENTION", stopped: "OFFLINE" };
 
 function fleetFetch(path, options = {}) {
   const headers = new Headers(options.headers);
   headers.set("authorization", `Bearer ${fleetApiToken}`);
-  headers.set("x-fleet-site", "plant-a");
+  headers.set("x-fleet-site", fleetSiteId);
   return fetch(path, { ...options, headers });
 }
 
@@ -623,6 +624,9 @@ async function connectFleet() {
   try {
     const health = await fleetFetch("/api/v1/health", { cache: "no-store" });
     if (health.ok) {
+      const runtime = await health.json();
+      fleetSiteId = runtime.siteId || fleetSiteId;
+      sessionStorage.setItem("brashFleetSiteId", fleetSiteId);
       fleetMode = "core";
       await refreshCoreSnapshot();
       pollTimer = setInterval(() => void refreshCoreSnapshot().catch(() => { $(".live-pill").innerHTML = "<i></i> RECONNECTING"; }), 2_000);

@@ -16,10 +16,11 @@ import { SecuredFleetApi } from "../api/secured-fleet-api.js";
 import { createDevelopmentIdentityProvider } from "../modules/identity/access-control.js";
 import { createDevelopmentAdapter, defaultInfrastructureResources } from "./create-development-system.js";
 
-export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
+export async function createPostgresDevelopmentSystem(config: DatabaseConfig, siteId = "plant-a") {
   const persistence = new PostgresPersistence(config);
   try {
     await persistence.migrate();
+    await persistence.bindSite(siteId);
     await persistence.maps.save(createDefaultPlantTopology());
     for (const resource of defaultInfrastructureResources()) {
       if (!await persistence.infrastructureResources.getById(resource.resourceId)) {
@@ -28,6 +29,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
     }
     const adapter = createDevelopmentAdapter();
     const core = new FleetCore({
+      siteId,
       alarms: persistence.alarms,
       missions: persistence.missions,
       missionQueue: persistence.missionQueue,
@@ -58,6 +60,7 @@ export async function createPostgresDevelopmentSystem(config: DatabaseConfig) {
     const metrics = new MetricsRegistry();
     const logger = new StructuredLogger("brash-fleet-core");
     const api = new SecuredFleetApi(new FleetApi(core), {
+      siteId,
       identities: createDevelopmentIdentityProvider(),
       audit: persistence.audit,
       observability: { metrics, logger, collectOperationalAnalytics: () => core.getOperationalAnalytics() },

@@ -92,6 +92,7 @@ import { WeightedDispatchPolicy } from "./policies/weighted-dispatch-policy.js";
 import { WorkOrderAllocationPolicy } from "./policies/work-order-allocation-policy.js";
 
 export interface FleetCoreDependencies {
+  siteId: string;
   alarms: AlarmRepository;
   missions: MissionRepository;
   missionQueue: MissionQueueRepository;
@@ -151,6 +152,7 @@ interface CancellationPreparation {
 }
 
 export class FleetCore {
+  readonly siteId: string;
   private readonly dependencies: FleetCoreDependencies;
   private readonly trafficLeaseMs: number;
   private readonly renewLeaseWithinMs: number;
@@ -169,6 +171,7 @@ export class FleetCore {
 
   constructor(dependencies: FleetCoreDependencies, recoveryOptions: FleetRecoveryOptions = {}) {
     this.dependencies = dependencies;
+    this.siteId = dependencies.siteId;
     this.trafficLeaseMs = recoveryOptions.trafficLeaseMs ?? 45_000;
     this.renewLeaseWithinMs = recoveryOptions.renewLeaseWithinMs ?? 20_000;
     this.dispatchQueueAgingIntervalMs = recoveryOptions.dispatchQueueAgingIntervalMs ?? 60_000;
@@ -1420,6 +1423,7 @@ export class FleetCore {
     const controlByRobot = new Map(controls.map((control) => [control.robotId, control]));
     return {
       schemaVersion: FLEET_SCHEMA_VERSION,
+      siteId: this.siteId,
       updatedAt: this.dependencies.clock.now().toISOString(),
       robots: robots.map((robot) => robotToView(robot, this.robotOperatorControlToView(controlByRobot.get(robot.robotId) ?? null))),
       missions: missions.map(missionToView),

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BRASH Fleet Core API
-  version: 0.14.0
-  description: Authenticated, role-authorized vendor-independent missions, workflows, infrastructure, traffic, alarms, and append-only audit API.
+  version: 0.15.0
+  description: Authenticated, role-authorized vendor-independent Fleet API. Every authenticated operation requires X-Fleet-Site matching the serving instance and identity scope.
 servers:
   - url: http://127.0.0.1:4273
 security:
@@ -19,10 +19,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [ok, service, robots, missions]
+                required: [ok, service, siteId, robots, missions]
                 properties:
                   ok: { type: boolean }
                   service: { type: string }
+                  siteId: { type: string }
                   robots: { type: integer, minimum: 0 }
                   missions: { type: integer, minimum: 0 }
   /api/v1/fleet/snapshot:
@@ -810,6 +811,12 @@ components:
       scheme: bearer
       bearerFormat: Fleet API token
   parameters:
+    FleetSite:
+      name: X-Fleet-Site
+      in: header
+      required: true
+      description: Canonical site served by this Fleet Core instance.
+      schema: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
     MissionId:
       name: missionId
       in: path
@@ -1624,9 +1631,10 @@ components:
             - type: "null"
     FleetSnapshot:
       type: object
-      required: [schemaVersion, updatedAt, robots, missions]
+      required: [schemaVersion, siteId, updatedAt, robots, missions]
       properties:
         schemaVersion: { const: "1.0" }
+        siteId: { type: string }
         updatedAt: { type: string, format: date-time }
         robots:
           type: array

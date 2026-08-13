@@ -390,6 +390,35 @@ test("PostgreSQL preserves operator quarantine across Fleet Core restart", {
   }
 });
 
+test("PostgreSQL schemas isolate site data inside one database", {
+  skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
+}, async () => {
+  const north = createPersistence(databaseUrl!, "brash_site_isolation_north");
+  const south = createPersistence(databaseUrl!, "brash_site_isolation_south");
+  await north.migrate();
+  await south.migrate();
+  await north.bindSite("plant-north");
+  await south.bindSite("plant-south");
+  await assert.rejects(() => north.bindSite("plant-south"), /bound to site plant-north/);
+  const mapId = `site-isolation-${randomUUID()}@1`;
+  const snapshot = createDefaultPlantTopology().snapshot();
+  const northOnlyMap = MapTopology.create({ ...snapshot, mapId, displayName: "North-only map" });
+  try {
+    await north.maps.save(northOnlyMap);
+    assert.ok(await north.maps.getById(mapId));
+    assert.equal(await south.maps.getById(mapId), null);
+    const [northSchema, southSchema] = await Promise.all([
+      north.database.query<{ schema: string }>("SELECT current_schema() AS schema"),
+      south.database.query<{ schema: string }>("SELECT current_schema() AS schema"),
+    ]);
+    assert.equal(northSchema.rows[0].schema, "brash_site_isolation_north");
+    assert.equal(southSchema.rows[0].schema, "brash_site_isolation_south");
+  } finally {
+    await north.close();
+    await south.close();
+  }
+});
+
 test("concurrent PostgreSQL schedulers reserve shared lanes without time overlap", {
   skip: databaseUrl ? false : "TEST_DATABASE_URL is not configured.",
 }, async () => {
@@ -749,10 +778,11 @@ async function closeStalePostgresTestWork(persistence: PostgresPersistence): Pro
   `);
 }
 
-function createPersistence(connectionString: string): PostgresPersistence {
+function createPersistence(connectionString: string, schema = "public"): PostgresPersistence {
   const config = loadPersistenceConfig({
     FLEET_PERSISTENCE: "postgres",
     DATABASE_URL: connectionString,
+    DATABASE_SCHEMA: schema,
   });
   return new PostgresPersistence(config.database!);
 }
@@ -766,6 +796,7 @@ function createCore(
   robotModel = "SIM-AMR",
 ): FleetCore {
   return new FleetCore({
+    siteId: "plant-a",
     alarms: persistence.alarms,
     missions: persistence.missions,
     missionQueue: persistence.missionQueue,
@@ -804,6 +835,7 @@ function createMultiRobotCore(
   clock: ManualClock,
 ): FleetCore {
   return new FleetCore({
+    siteId: "plant-a",
     alarms: persistence.alarms,
     missions: persistence.missions,
     missionQueue: persistence.missionQueue,

@@ -12,7 +12,8 @@ Manages users, service identities, roles, and scoped access.
   and timing-safe comparison; raw configured tokens are not retained.
 - `VIEWER`, `OPERATOR`, `DISPATCHER`, `FLEET_ADMIN`, and `INTEGRATION` roles map
   to explicit API permissions.
-- Optional `x-fleet-site` scope is enforced for identities without wildcard site access.
+- `x-fleet-site` is mandatory for every authenticated request and must match
+  both the serving Fleet Core instance and the identity's site scope.
 - `GET /api/v1/identity/me` returns the effective identity and permissions.
 - Operator IDs inside request bodies are replaced with the authenticated subject,
   preventing clients from impersonating another operator in domain records.

@@ -7,6 +7,7 @@ import type { FleetApi } from "./fleet-api.js";
 import { hasPermission, type FleetPrincipal, type IdentityProvider } from "../modules/identity/access-control.js";
 
 interface SecurityDependencies {
+  siteId: string;
   identities: IdentityProvider;
   audit: AuditRepository;
   now?: () => Date;
@@ -70,6 +71,14 @@ export class SecuredFleetApi {
       return finish(errorResponse(401, "AUTHENTICATION_REQUIRED", "A valid Fleet API bearer token is required.", {
         "www-authenticate": 'Bearer realm="brash-fleet"',
       }));
+    }
+    if (!siteId) {
+      if (rule.mutation) await this.audit(rule, principal, "DENIED", request, correlationId, null, { reason: "SITE_ID_REQUIRED" });
+      return finish(errorResponse(400, "SITE_ID_REQUIRED", "The X-Fleet-Site header is required."));
+    }
+    if (siteId !== this.security.siteId) {
+      if (rule.mutation) await this.audit(rule, principal, "DENIED", request, correlationId, siteId, { reason: "SITE_NOT_SERVED" });
+      return finish(errorResponse(404, "SITE_NOT_SERVED", `This Fleet Core instance does not serve site ${siteId}.`));
     }
     if (!hasPermission(principal, rule.permission, siteId)) {
       if (rule.mutation) await this.audit(rule, principal, "DENIED", request, correlationId, siteId, { reason: "PERMISSION_DENIED", permission: rule.permission });

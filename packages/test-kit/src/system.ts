@@ -28,6 +28,7 @@ export function createTestFleetSystem(options: {
   autoAdvance?: boolean;
   robots?: SimulatorRobotDefinition[];
   coreOptions?: FleetRecoveryOptions;
+  siteId?: string;
 } = {}) {
   const clock = new ManualClock();
   const ids = new SequentialIdGenerator();
@@ -72,6 +73,7 @@ export function createTestFleetSystem(options: {
   const workOrders = new InMemoryWorkOrderRepository();
   const transactions = new InMemoryTransactionManager();
   const core = new FleetCore({
+    siteId: options.siteId ?? "plant-a",
     alarms,
     missions,
     missionQueue,

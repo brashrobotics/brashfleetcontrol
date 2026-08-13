@@ -69,6 +69,7 @@ test("an audit storage outage fails a mutation closed before domain state change
     list: (filter) => new InMemoryAuditRepository().list(filter),
   };
   const api = new SecuredFleetApi(new FleetApi(core), {
+    siteId: "plant-a",
     identities: new StaticTokenIdentityProvider([{ token: "chaos-operator-token", subjectId: "chaos-operator", displayName: "Chaos Operator", subjectType: "USER", role: "OPERATOR", siteIds: ["*"] }]),
     audit: unavailableAudit,
   });
@@ -76,7 +77,7 @@ test("an audit storage outage fails a mutation closed before domain state change
   try {
     const response = await api.fetch(new Request("http://fleet.test/api/v1/missions", {
       method: "POST",
-      headers: { authorization: "Bearer chaos-operator-token", "content-type": "application/json" },
+      headers: { authorization: "Bearer chaos-operator-token", "content-type": "application/json", "x-fleet-site": "plant-a" },
       body: JSON.stringify(transportMissionFixture({ externalReference: "CHAOS-AUDIT-OUTAGE" })),
     }));
     assert.equal(response.status, 503);

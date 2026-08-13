@@ -47,9 +47,9 @@ export class StaticTokenIdentityProvider implements IdentityProvider {
   }
 }
 
-export function hasPermission(principal: FleetPrincipal, permission: FleetPermission, siteId: string | null): boolean {
+export function hasPermission(principal: FleetPrincipal, permission: FleetPermission, siteId: string): boolean {
   return principal.permissions.includes(permission)
-    && (!siteId || principal.siteIds.includes("*") || principal.siteIds.includes(siteId));
+    && (principal.siteIds.includes("*") || principal.siteIds.includes(siteId));
 }
 
 export function createDevelopmentIdentityProvider(serialized = process.env.FLEET_API_TOKENS): StaticTokenIdentityProvider {

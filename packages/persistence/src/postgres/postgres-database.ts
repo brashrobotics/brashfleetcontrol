@@ -10,14 +10,24 @@ import {
 export class PostgresDatabase {
   private readonly pool: Pool;
   private readonly transactionClient = new AsyncLocalStorage<PoolClient>();
+  readonly schema: string;
 
   constructor(config: DatabaseConfig) {
+    this.schema = config.schema;
     this.pool = new Pool({
       connectionString: config.connectionString,
       max: config.maxConnections,
       idleTimeoutMillis: config.idleTimeoutMs,
       statement_timeout: config.statementTimeoutMs,
       ssl: config.ssl || undefined,
+      options: `-c search_path=${config.schema},public`,
+    });
+  }
+
+  async ensureSchema(): Promise<void> {
+    await this.withDedicatedClient(async (client) => {
+      await client.query(`CREATE SCHEMA IF NOT EXISTS "${this.schema}"`);
+      await client.query(`SET search_path TO "${this.schema}", public`);
     });
   }
 

@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
-import { loadPersistenceConfig } from "@brash/config";
+import { loadPersistenceConfig, loadSiteConfig } from "@brash/config";
 import { createDevelopmentSystem } from "./bootstrap/create-development-system.js";
 import { createPostgresDevelopmentSystem } from "./bootstrap/create-postgres-development-system.js";
 import { serveFleetUi } from "./http/static-fleet-ui.js";
@@ -13,10 +13,11 @@ import { IntegrationOutboxWorker } from "./workers/integration-outbox-worker.js"
 import { HttpIntegrationEventPublisher } from "./modules/integrations/http-integration-publisher.js";
 
 const persistenceConfig = loadPersistenceConfig();
+const siteConfig = loadSiteConfig();
 const postgresSystem = persistenceConfig.mode === "postgres"
-  ? await createPostgresDevelopmentSystem(persistenceConfig.database!)
+  ? await createPostgresDevelopmentSystem(persistenceConfig.database!, siteConfig.siteId)
   : null;
-const system = postgresSystem ?? createDevelopmentSystem();
+const system = postgresSystem ?? createDevelopmentSystem(siteConfig.siteId);
 const { core, api, metrics, logger } = system;
 await core.start();
 const workerError = (worker: string) => (error: unknown): void => {
@@ -88,6 +89,6 @@ process.once("SIGINT", () => void shutdown());
 
 server.listen(port, "127.0.0.1", () => {
   console.log(
-    `BRASH Fleet Control ready (${persistenceConfig.mode}): http://127.0.0.1:${port}`,
+    `BRASH Fleet Control ready (${persistenceConfig.mode}, ${siteConfig.siteId}): http://127.0.0.1:${port}`,
   );
 });
